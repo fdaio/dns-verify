@@ -12,10 +12,10 @@ func TestParseIPField(t *testing.T) {
 		want  string
 		ok    bool
 	}{
-		{`"58.247.216.33"`, "58.247.216.33", true},
-		{"172.253.80.216", "172.253.80.216", true},
-		{"2400:cb00:447:1024::ac46:d509", "2400:cb00:447:1024::ac46:d509", true},
-		{"edns0-client-subnet 89.116.89.0/24", "", false},
+		{`"192.0.2.33"`, "192.0.2.33", true},
+		{"198.51.100.7", "198.51.100.7", true},
+		{"2001:db8::1", "2001:db8::1", true},
+		{"edns0-client-subnet 203.0.113.0/24", "", false},
 		{"edns0-client-subnet", "", false},
 		{`"not an address"`, "", false},
 		{"", "", false},
@@ -40,8 +40,8 @@ func TestParseOrigin(t *testing.T) {
 		country string
 		ok      bool
 	}{
-		{`"13335 | 1.1.1.0/24 | AU | apnic | 2011-08-11"`, 13335, "1.1.1.0/24", "AU", true},
-		{`"17621 | 58.247.0.0/16 | CN | apnic | 2005-06-16"`, 17621, "58.247.0.0/16", "CN", true},
+		{`"64500 | 198.51.100.0/24 | DE | ripe | 2020-01-01"`, 64500, "198.51.100.0/24", "DE", true},
+		{`"64501 | 203.0.113.0/24 | NL | ripe | 2021-01-01"`, 64501, "203.0.113.0/24", "NL", true},
 		{"", 0, "", "", false},
 		{`"NA | 0.0.0.0/0 | ZZ | reserved"`, 0, "", "", false},
 		{`"not a record"`, 0, "", "", false},
@@ -66,7 +66,7 @@ func TestReverseNibbles(t *testing.T) {
 		want string
 	}{
 		{"1.1.1.1", "01010101"},
-		{"58.247.216.33", "21d8f73a"},
+		{"192.0.2.33", "210200c0"},
 		{"223.5.5.5", "050505df"},
 	}
 	for _, c := range cases {
@@ -84,7 +84,7 @@ func TestOriginQueryName(t *testing.T) {
 		want string
 	}{
 		{"1.1.1.1", "01010101.origin.asn.cymru.com"},
-		{"58.247.216.33", "21d8f73a.origin.asn.cymru.com"},
+		{"192.0.2.33", "210200c0.origin.asn.cymru.com"},
 		{"2001:db8::1", "010000000000000000000000b80d0120.origin6.asn.cymru.com"},
 	}
 	for _, c := range cases {
@@ -96,8 +96,8 @@ func TestOriginQueryName(t *testing.T) {
 }
 
 func TestOriginString(t *testing.T) {
-	if got := (Origin{ASN: 13335}).String(); got != "AS13335" {
-		t.Errorf("Origin.String() = %q, want AS13335", got)
+	if got := (Origin{ASN: 64500}).String(); got != "AS64500" {
+		t.Errorf("Origin.String() = %q, want AS64500", got)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestResolverString(t *testing.T) {
 	}{
 		{Resolver{Addr: netip.MustParseAddr("1.1.1.1")}, "1.1.1.1:53"},
 		{Resolver{Addr: netip.MustParseAddr("1.1.1.1"), Port: 853}, "1.1.1.1:853"},
-		{Resolver{Addr: netip.MustParseAddr("2400:cb00::1")}, "[2400:cb00::1]:53"},
+		{Resolver{Addr: netip.MustParseAddr("2001:db8::1")}, "[2001:db8::1]:53"},
 	}
 	for _, c := range cases {
 		if got := c.resolver.String(); got != c.want {
