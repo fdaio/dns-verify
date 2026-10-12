@@ -30,16 +30,17 @@ const checkTimeout = 90 * time.Second
 type checker func(context.Context) (analyze.Report, error)
 
 func main() {
+	// The guard lives here rather than in realMain, so the flag handling and the
+	// exit code stay testable on any platform.
+	if runtime.GOOS != "darwin" {
+		fmt.Fprintf(os.Stderr, "dns-verify: %s is not supported, this check reads macOS DNS state\n",
+			runtime.GOOS)
+		os.Exit(2)
+	}
 	os.Exit(realMain(os.Args[1:], os.Stdout, os.Stderr, run.Run))
 }
 
 func realMain(args []string, stdout, stderr io.Writer, check checker) int {
-	if runtime.GOOS != "darwin" {
-		fmt.Fprintf(stderr, "dns-verify: %s is not supported, this check reads macOS DNS state\n",
-			runtime.GOOS)
-		return 2
-	}
-
 	flags := flag.NewFlagSet("dns-verify", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	verbose := flags.Bool("v", false, "print the measurements behind each verdict")
