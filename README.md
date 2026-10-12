@@ -1,7 +1,7 @@
 # dns-verify
 
-Reports the DNS posture of a macOS workstation in one screen: a score out of
-ten, four verdicts, and what to do next.
+Reports the DNS posture of a macOS or Linux workstation in one screen: a score
+out of ten, four verdicts, and what to do next.
 
 ```
 $ dns-verify
@@ -18,17 +18,19 @@ FIX FIRST
   ! 2. Block outbound port 53 so only the tunnel resolver stays reachable
 ```
 
-macOS only: the check reads the merged SystemConfiguration state, which no other
-platform exposes the same way.
+macOS and Linux only. Each system keeps its resolver configuration somewhere
+different, so the check reads what that system actually applies rather than
+assuming one layout.
 
 ## Install
 
-Pick your architecture, `arm64` on Apple silicon and `amd64` on Intel. The
-archive holds a single binary.
+Pick your system and architecture: `arm64` on Apple silicon and most modern
+CPUs, `amd64` on Intel. The archive holds a single binary.
 
 ```sh
+OS=darwin                                    # darwin or linux
 ARCH=arm64
-curl -fsSL "https://github.com/fdaio/dns-verify/releases/latest/download/dns-verify_darwin_${ARCH}.tar.gz" | tar xz
+curl -fsSL "https://github.com/fdaio/dns-verify/releases/latest/download/dns-verify_${OS}_${ARCH}.tar.gz" | tar xz
 sudo install -m 0755 dns-verify /usr/local/bin/
 dns-verify --version
 ```
@@ -42,7 +44,7 @@ removing it leaves the machine exactly as it was.
 
 ```sh
 sudo rm /usr/local/bin/dns-verify
-rm -f dns-verify_darwin_*.tar.gz
+rm -f dns-verify_darwin_*.tar.gz dns-verify_linux_*.tar.gz
 ```
 
 ## Flags
@@ -81,16 +83,17 @@ and the headline counts how many were left unmeasured.
 
 | Question | Measurement |
 |----------|-------------|
-| Own DNS | The resolvers macOS applies, from `scutil --dns`, grouped by address. `networksetup` says whether a person set the server or the network handed it over. |
+| Own DNS | The resolvers this system applies: SystemConfiguration on macOS, and `/etc/resolv.conf` plus the stack behind it on Linux. Whether a person set the resolver or the network handed it over is read from the source. |
 | Via proxy | Each resolver is asked which source address it sees. One answering from outside the tunnel exit sends queries outside the tunnel. The exit is measured with a plain HTTPS request to Cloudflare. |
 | Hijacking | Random labels under the RFC 2606 domains. No honest resolver can answer them, so any address returned is a rewritten one. |
 | Leakage | Those source addresses are compared with the tunnel exit, and each one's network is looked up through Team Cymru over DNS. |
 
 Supporting probes: cleartext DNS on port 53 over UDP and TCP, fake-IP answers in
-`198.18.0.0/16`, DoH and DoT profiles in `/etc/resolver`, and IPv6 on an interface
-the tunnel does not cover. A resolver that cannot echo its source address is named
-as unmeasured, never counted as clean. A fix carries a runnable command only when
-the tool can name both the service and the address to write.
+`198.18.0.0/16`, encrypted resolvers, and IPv6 on an interface the tunnel does
+not cover. A resolver that cannot echo its source address is named as unmeasured,
+never counted as clean. A fix carries a runnable command only when the tool can
+name both the service and the address to write, and the command is the one that
+system uses.
 
 ## Development
 

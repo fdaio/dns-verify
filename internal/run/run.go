@@ -174,17 +174,14 @@ func explicitServices(ctx context.Context, views []analyze.ResolverView) ([]stri
 	return names, len(chosen), len(names)
 }
 
-// encryptedProfiles lists the DoH and DoT profiles installed on this machine.
+// encryptedProfiles lists the encrypted resolver profiles installed on this
+// machine.
 func encryptedProfiles() []string {
-	profiles, err := sysdns.ReadEncryptedProfiles(sysdns.ResolverDir)
+	profiles, err := sysdns.EncryptedProfiles(sysdns.ResolverDir)
 	if err != nil {
 		return nil
 	}
-	out := make([]string, 0, len(profiles))
-	for _, p := range profiles {
-		out = append(out, p.Domain+" "+p.Scheme())
-	}
-	return out
+	return append([]string(nil), profiles...)
 }
 
 // measurement is what one resolver probe found. Probes run concurrently, so
