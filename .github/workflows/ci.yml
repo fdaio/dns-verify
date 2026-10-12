@@ -46,6 +46,11 @@ jobs:
             exit 1
           fi
 
+      # A workflow with a broken job graph is rejected when the release runs, not
+      # here, so it is checked on every change instead.
+      - name: Check workflow graphs
+        run: make check
+
   lint:
     name: lint
     runs-on: ubuntu-latest
