@@ -181,22 +181,99 @@ func TestProgressCountsSteps(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProgress(&buf, Env{Progress: true})
 
-	p.Start("asking resolvers", 3)
+	p.Start("measuring the tunnel exit", 9)
 	p.Advance()
-	if !strings.Contains(buf.String(), "1/3") {
+	if !strings.Contains(buf.String(), "1/9") {
 		t.Errorf("the step count must be visible, got %q", buf.String())
 	}
-	if strings.Contains(buf.String(), "4/3") {
+	if strings.Contains(buf.String(), "10/9") {
 		t.Error("the count must not run past the total")
 	}
 }
 
-func TestProgressSingleStepOmitsCount(t *testing.T) {
+// The bar used to restart at zero for every stage, which read as the line
+// shaking. It must only ever move forward across a whole run.
+func TestBarNeverGoesBackwards(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProgress(&buf, Env{Progress: true})
 
-	p.Start("measuring the tunnel exit", 1)
-	if strings.Contains(buf.String(), "/1") {
-		t.Errorf("a single step needs no counter, got %q", buf.String())
+	stages := []struct {
+		label string
+		steps int
+	}{
+		{"measuring the tunnel exit", 1},
+		{"asking resolvers for their source address", 3},
+		{"probing for hijacked answers", 3},
+		{"looking up the network of each address", 1},
 	}
+	previous := -1
+	for _, stage := range stages {
+		p.Start(stage.label, 8)
+		for range stage.steps {
+			p.Advance()
+			filled := strings.Count(lastFrame(buf.String()), glyphFull)
+			if filled < previous {
+				t.Fatalf("the bar went backwards at %q: %d filled cells after %d",
+					stage.label, filled, previous)
+			}
+			previous = filled
+		}
+	}
+}
+
+// A stage name of a different length must not move anything before it. The bar
+// and the stage name both have to start on the same column every frame.
+func TestStageNameDoesNotMoveTheBar(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProgress(&buf, Env{Progress: true})
+
+	barColumn, labelColumn := 0, 0
+	for _, label := range []string{
+		"reading DNS configuration",
+		"measuring the tunnel exit",
+		"asking resolvers for their source address",
+		"looking up the network of each address",
+	} {
+		p.Start(label, 20)
+		line := lastFrame(buf.String())
+		bar := strings.Index(line, glyphEmpty)
+		name := strings.Index(line, label)
+		if bar < 0 || name < 0 {
+			t.Fatalf("stage %q drew no bar or no name: %q", label, line)
+		}
+		if barColumn == 0 {
+			barColumn, labelColumn = bar, name
+		}
+		if bar != barColumn {
+			t.Errorf("stage %q put the bar at column %d, want %d", label, bar, barColumn)
+		}
+		if name != labelColumn {
+			t.Errorf("stage %q put the name at column %d, want %d", label, name, labelColumn)
+		}
+	}
+}
+
+// The counter appears once the total is known. It must be the last thing on the
+// line, so the stage name does not shift when it shows up.
+func TestCountAppearsAtTheEndOfTheLine(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProgress(&buf, Env{Progress: true})
+
+	p.Start("reading DNS configuration", 0)
+	if strings.Contains(buf.String(), "/") {
+		t.Errorf("a stage without a total must show no counter, got %q", lastFrame(buf.String()))
+	}
+
+	p.Start("measuring the tunnel exit", 12)
+	line := lastFrame(buf.String())
+	if !strings.HasSuffix(line, "0/12") {
+		t.Errorf("the counter must end the line, got %q", line)
+	}
+}
+
+// lastFrame returns the line the progress bar last drew, without the prefix
+// that rewinds and erases it.
+func lastFrame(s string) string {
+	frames := strings.Split(s, "\r\x1b[2K")
+	return frames[len(frames)-1]
 }
