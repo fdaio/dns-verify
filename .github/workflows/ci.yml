@@ -56,8 +56,8 @@ jobs:
         with:
           version: v2.14.0
 
-  # The check reads live macOS DNS state, so it only builds on macOS. Linux
-  # still compiles the packages that carry no system call.
+  # The live-state read is macOS only, so the full run happens there. Every
+  # package must still compile everywhere, which is what the Linux job catches.
   compile-linux:
     name: compile (linux)
     runs-on: ubuntu-latest
@@ -69,5 +69,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build packages
-        run: go build ./internal/analyze/... ./internal/probe/... ./internal/render/...
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./... -count=1
