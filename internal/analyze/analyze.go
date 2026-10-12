@@ -339,6 +339,32 @@ func answerOwnResolver(f Facts) Answer {
 	}
 }
 
+// FixCommand is the command that points a named service at an address. The
+// wording differs per platform, and the tool only offers it when it can name both
+// the service and the address.
+func FixCommand(service string, addr netip.Addr) string {
+	format, ok := fixCommands[Platform]
+	if !ok {
+		return ""
+	}
+	// The service is quoted because a Linux interface name and a macOS network
+	// service name both contain spaces.
+	return fmt.Sprintf(format, quoteArg(service), addr)
+}
+
+// quoteArg wraps a service name in double quotes for the shell command.
+func quoteArg(s string) string { return `"` + s + `"` }
+
+// fixCommands holds the per-platform command to write a resolver. A platform
+// with no entry offers no command rather than one that cannot run.
+var fixCommands = map[string]string{
+	"macos": `networksetup -setdnsservers %s %s`,
+	"linux": `resolvectl dns %s %s`,
+}
+
+// Platform names the resolver configuration system this build reads.
+var Platform = "other"
+
 // tunnelResolverFix names the service and the address to write, but only when
 // both are known. A command with a placeholder is worse than no command.
 func tunnelResolverFix(f Facts, effective []ResolverView) *Fix {
@@ -358,8 +384,7 @@ func tunnelResolverFix(f Facts, effective []ResolverView) *Fix {
 	if len(local) == 0 {
 		return fix
 	}
-	fix.Command = fmt.Sprintf("networksetup -setdnsservers %q %s",
-		f.ServiceNames[0], local[0].Addr)
+	fix.Command = FixCommand(f.ServiceNames[0], local[0].Addr)
 	return fix
 }
 

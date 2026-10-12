@@ -1,10 +1,11 @@
+// Package term decides what the output stream can take, and draws progress on
+// it.
+//
+// Everything here is a no-op when the stream is not a terminal, so the same
+// code path produces a clean report in a file or a pipeline.
 package term
 
-import (
-	"os"
-	"syscall"
-	"unsafe"
-)
+import "os"
 
 // Env describes what the output stream accepts.
 type Env struct {
@@ -30,18 +31,4 @@ func Detect(out *os.File, lookup func(string) (string, bool)) Env {
 		return env
 	}
 	return Env{Color: true, Progress: true}
-}
-
-// isTerminal reports whether the file is attached to a terminal.
-//
-// Reading the terminal attributes is the only way to tell a terminal from a pipe
-// without consuming from the stream.
-func isTerminal(f *os.File) bool {
-	if f == nil {
-		return false
-	}
-	var attr syscall.Termios
-	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, f.Fd(),
-		uintptr(readTermios), uintptr(unsafe.Pointer(&attr)), 0, 0, 0)
-	return errno == 0
 }

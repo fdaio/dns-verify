@@ -185,13 +185,17 @@ func TestFixCommandOnlyWhenFullyKnown(t *testing.T) {
 		Reachable: true,
 	})
 
+	// The command is the one this platform can actually run.
 	facts.ServiceNames = []string{"Wi-Fi"}
 	r := Build(facts)
 	fix := r.Answers[0].Fix
 	if fix == nil {
 		t.Fatal("a warning must carry a fix")
 	}
-	want := `networksetup -setdnsservers "Wi-Fi" 100.101.255.254`
+	want := FixCommand("Wi-Fi", addr("100.101.255.254"))
+	if want == "" {
+		t.Fatal("this platform must be able to name its write command")
+	}
 	if fix.Command != want {
 		t.Errorf("command = %q, want %q", fix.Command, want)
 	}
@@ -204,6 +208,28 @@ func TestFixCommandOnlyWhenFullyKnown(t *testing.T) {
 	}
 	if fix == nil || fix.Text == "" {
 		t.Error("the fix must still say what to do in words")
+	}
+}
+
+// A platform with no command for writing a resolver must offer none, rather than
+// one that cannot run there.
+func TestFixCommandOnUnsupportedPlatform(t *testing.T) {
+	saved := Platform
+	Platform = "other"
+	defer func() { Platform = saved }()
+
+	if got := FixCommand("Wi-Fi", addr("100.101.255.254")); got != "" {
+		t.Errorf("FixCommand on an unknown platform = %q, want none", got)
+	}
+}
+
+// Every platform this tool supports must be able to name its own write command,
+// otherwise a fix silently degrades to words on one system.
+func TestSupportedPlatformsHaveACommand(t *testing.T) {
+	for _, platform := range []string{"macos", "linux"} {
+		if _, ok := fixCommands[platform]; !ok {
+			t.Errorf("platform %q has no write command", platform)
+		}
 	}
 }
 

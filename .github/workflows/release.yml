@@ -1,7 +1,8 @@
-# Tag-driven release. A v* tag produces one archive per macOS architecture.
+# Tag-driven release. A v* tag produces one archive per supported platform.
 #
-# macOS only: the check reads the merged SystemConfiguration state, which no
-# other platform exposes, so a binary for another system would refuse to run.
+# macOS and Linux: the check reads the resolver configuration each system
+# applies, and a binary built for a system this tool cannot read would refuse to
+# run.
 name: Release
 
 on:
@@ -14,8 +15,16 @@ permissions:
 
 jobs:
   test:
-    name: test
-    runs-on: macos-latest
+    name: test (${{ matrix.os }})
+    needs: [ test ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: darwin
+          - os: linux
     steps:
       - uses: actions/checkout@v4
 
@@ -24,36 +33,46 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./... -count=1
-
-      - name: Build the stamped binary
-        run: make build VERSION="${GITHUB_REF_NAME}"
-
-      - name: Check the stamped version
+      # The binary is run on the system it was built for, because the check reads
+      # that system's live resolver state and refuses to run anywhere else.
+      - name: Vet, test and run
         run: |
-          got=$(./dns-verify --version)
+          go vet ./...
+          go test ./... -count=1
+          make build VERSION="${GITHUB_REF_NAME}"
+          reported=$(./dns-verify --version)
           want="dns-verify ${GITHUB_REF_NAME}"
-          if [ "$got" != "$want" ]; then
-            echo "version is '$got', want '$want'"
+          if [ "$reported" != "$want" ]; then
+            echo "version is '$reported', want '$want'"
             exit 1
           fi
+          # A run that cannot read this system exits 2, which would pass the
+          # version check above and ship a binary that does nothing.
+          if ! ./dns-verify > report.txt; then
+            echo "the check did not complete on ${{ matrix.os }}"
+            cat report.txt
+            exit 1
+          fi
+          head -3 report.txt
 
   build:
-    name: build (darwin/${{ matrix.arch }})
+    name: build (${{ matrix.os }}/${{ matrix.arch }})
     needs: [ test ]
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
     strategy:
       # Cancelling the sibling on the first failure hides that architecture's
       # result, which is how a release once shipped with a missing binary.
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
-          - arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -64,32 +83,40 @@ jobs:
 
       - name: Build binary
         env:
-          GOOS: darwin
+          GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
         run: |
           mkdir -p staging
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
             -o staging/dns-verify ./cmd/dns-verify
-          archive="dns-verify_${GITHUB_REF_NAME}_darwin_${{ matrix.arch }}.tar.gz"
+          archive="dns-verify_${GITHUB_REF_NAME}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz"
           tar czf "$archive" -C staging dns-verify
           # A second copy without the version, so that the documented download
           # URL keeps working after the next release renames its own assets.
-          cp "$archive" "dns-verify_darwin_${{ matrix.arch }}.tar.gz"
+          cp "$archive" "dns-verify_${{ matrix.os }}_${{ matrix.arch }}.tar.gz"
           # An archive holding the wrong file installs silently and fails at run
           # time, so the contents are checked before it ships.
-          for a in "$archive" "dns-verify_darwin_${{ matrix.arch }}.tar.gz"; do
+          for a in "$archive" "dns-verify_${{ matrix.os }}_${{ matrix.arch }}.tar.gz"; do
             contents=$(tar tzf "$a")
             if [ "$contents" != "dns-verify" ]; then
               echo "$a holds '$contents', want exactly 'dns-verify'"
               exit 1
             fi
           done
+          # The binary must report this tag, so a stamping mistake fails here
+          # rather than in a user's hands.
+          reported=$(./staging/dns-verify --version)
+          if [ "$reported" != "dns-verify ${GITHUB_REF_NAME}" ]; then
+            echo "binary reports '$reported', want 'dns-verify ${GITHUB_REF_NAME}'"
+            exit 1
+          fi
           echo "built $archive"
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
-          name: dns-verify_darwin_${{ matrix.arch }}
+          name: dns-verify_${{ matrix.os }}_${{ matrix.arch }}
           path: dns-verify_*.tar.gz
           # A path that matches nothing leaves an empty artifact and the job
           # still passes, which is how a release once shipped with no binary.

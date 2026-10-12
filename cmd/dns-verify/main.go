@@ -37,8 +37,8 @@ type checker func(context.Context) (analyze.Report, error)
 func main() {
 	// The guard lives here rather than in realMain, so the flag handling and the
 	// exit code stay testable on any platform.
-	if runtime.GOOS != "darwin" {
-		fmt.Fprintf(os.Stderr, "dns-verify: %s is not supported, this check reads macOS DNS state\n",
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "dns-verify: %s is not supported, this check reads macOS and Linux DNS state\n",
 			runtime.GOOS)
 		os.Exit(2)
 	}

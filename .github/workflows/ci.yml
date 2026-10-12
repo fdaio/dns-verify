@@ -12,8 +12,14 @@ permissions:
 
 jobs:
   build:
-    name: build and test
-    runs-on: macos-latest
+    name: build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: darwin
+          - os: linux
     steps:
       - uses: actions/checkout@v4
 
@@ -56,11 +62,13 @@ jobs:
         with:
           version: v2.14.0
 
-  # The live-state read is macOS only, so the full run happens there. Every
-  # package must still compile everywhere, which is what the Linux job catches.
-  compile-linux:
-    name: compile (linux)
-    runs-on: ubuntu-latest
+  # The live-state read is macOS and Linux only, so the full run happens on
+  # both. Every package must compile everywhere, which is what the Windows job
+  # catches, because a reader that names a platform it cannot reach would fail
+  # to build rather than fail at run time.
+  compile-windows:
+    name: compile (windows)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -71,6 +79,3 @@ jobs:
 
       - name: Build
         run: go build ./...
-
-      - name: Test
-        run: go test ./... -count=1
