@@ -16,6 +16,6 @@ func System(context.Context) (Config, error) {
 
 // ExplicitServers reports the same limitation, so a caller cannot mistake an
 // unreadable configuration for an empty one.
-func ExplicitServers(context.Context) (map[string][]string, error) {
+func ExplicitServers(context.Context) ([]Service, error) {
 	return nil, fmt.Errorf("reading the DNS configuration needs macOS, not %s", runtime.GOOS)
 }

@@ -1,10 +1,11 @@
-// Package analyze turns raw DNS measurements into the four answers the report
-// exists to give. Every rule is a pure function of the measurements, so the
-// reasoning can be tested without a network.
+// Package analyze turns raw DNS measurements into the answers the report gives.
+// Every rule is a pure function of the measurements, so the reasoning can be
+// tested without a network.
 package analyze
 
 import (
 	"fmt"
+	"math"
 	"net/netip"
 	"sort"
 	"strings"
@@ -42,6 +43,23 @@ func (s State) String() string {
 	}
 }
 
+// pointsPerQuestion spreads the ten point score over the four questions.
+const pointsPerQuestion = 2.5
+
+// pointsFor is the share of one question that a state earns. A question that
+// could not be measured earns nothing, because an unmeasured question has not
+// been shown to be safe.
+func pointsFor(s State) float64 {
+	switch s {
+	case StateGood:
+		return pointsPerQuestion
+	case StateWarn:
+		return 1.5
+	default:
+		return 0
+	}
+}
+
 // ResolverView is one resolver that serves lookups on this machine.
 type ResolverView struct {
 	// Addr is the nameserver address.
@@ -59,8 +77,8 @@ type ResolverView struct {
 	// Explicit marks a server set on a network service by hand. A resolver the
 	// network hands out is not a choice.
 	Explicit bool
-	// ServesDomains lists the split-DNS domains routed to this resolver.
-	ServesDomains []string
+	// ServesDomains counts the split-DNS domains routed to this resolver.
+	ServesDomains int
 	// EchoAddr is the source address the resolver reported. It shows which path
 	// the resolver reaches the internet by, which is the path every lookup
 	// through it takes.
@@ -72,8 +90,8 @@ type ResolverView struct {
 	UpstreamAddr netip.Addr
 }
 
-// Encrypted reports whether the resolver is reached over an encrypted port or
-// carries an encryption flag in the system configuration.
+// Encrypted reports whether the resolver is reached over DoH or DoT. The answer
+// is derived rather than stored, so the label and the verdict cannot disagree.
 func (r ResolverView) Encrypted() bool {
 	if sysdns.IsEncryptedPort(r.Port) {
 		return true
@@ -90,8 +108,8 @@ func (r ResolverView) Encrypted() bool {
 type Facts struct {
 	// Resolvers are the resolvers that serve ordinary lookups.
 	Resolvers []ResolverView
-	// SplitScopedDomains is the number of domains routed to a dedicated resolver.
-	SplitScopedDomains int
+	// ServiceNames lists the enabled network services by name.
+	ServiceNames []string
 	// ExplicitServices is the number of network services with a hand-set server.
 	ExplicitServices int
 	// TotalServices is the number of enabled network services.
@@ -105,10 +123,6 @@ type Facts struct {
 	PlaintextTCP bool
 	// Hijack is the result of the reserved-name probe.
 	Hijack probe.HijackResult
-	// HijackErr records why the probe did not complete.
-	HijackErr error
-	// FakeIPTarget is the name used to test for fake addresses.
-	FakeIPTarget string
 	// IPv6Bypass lists IPv6 addresses that the tunnel does not cover.
 	IPv6Bypass []string
 	// Egress is the source address of ordinary traffic, when measured.
@@ -119,16 +133,32 @@ type Facts struct {
 	Origins map[string]probe.Origin
 }
 
-// Answer is one of the four questions with its verdict and supporting facts.
+// Fix is one action that would improve the score.
+type Fix struct {
+	// Severity orders the fixes. A lower value is more urgent.
+	Severity State
+	// Text says what to do.
+	Text string
+	// Command is a command that performs the fix. It is set only when the tool
+	// can name the exact service and the exact address to write, because a
+	// command with a placeholder in it is easier to run wrong than to read.
+	Command string
+}
+
+// Answer is one of the four questions with its verdict and its consequence.
 type Answer struct {
-	// Question is the question being answered.
+	// Label is the short name shown in the report.
+	Label string
+	// Question is the full question, shown only in the detailed output.
 	Question string
 	// State is the verdict.
 	State State
-	// Summary is the one-line conclusion.
+	// Hint is the one-line conclusion.
+	Hint string
+	// Summary is the full conclusion, shown only in the detailed output.
 	Summary string
-	// Advice is the single next step, when one applies.
-	Advice string
+	// Fix is the action that would improve this answer, if one applies.
+	Fix *Fix
 }
 
 // Report is the full result of a run.
@@ -137,6 +167,43 @@ type Report struct {
 	Answers []Answer
 	// Facts is the measurement set the answers came from.
 	Facts Facts
+}
+
+// Score is the ten point total for the run.
+func (r Report) Score() int {
+	total := 0.0
+	for _, a := range r.Answers {
+		total += pointsFor(a.State)
+	}
+	return int(math.Round(total))
+}
+
+// MaxScore is the score of a run in which every question is good.
+const MaxScore = 10
+
+// NotMeasured counts the questions that could not be measured.
+func (r Report) NotMeasured() int {
+	n := 0
+	for _, a := range r.Answers {
+		if a.State == StateUnknown {
+			n++
+		}
+	}
+	return n
+}
+
+// Grade is the one-word headline of the run.
+func (r Report) Grade() string {
+	switch r.Worst() {
+	case StateGood:
+		return "UNDER CONTROL"
+	case StateWarn:
+		return "PARTLY MANAGED"
+	case StateUnmanaged:
+		return "NOT MANAGED"
+	default:
+		return "INCONCLUSIVE"
+	}
 }
 
 // Worst returns the least reassuring state in the report.
@@ -150,37 +217,18 @@ func (r Report) Worst() State {
 	return worst
 }
 
-// Overall returns the one-line headline of the run.
-func (r Report) Overall() string {
-	var good, warn, unmanaged, unknown int
+// Fixes returns the actions worth taking, most urgent first. A question that
+// could not be measured is not a defect, so it ranks behind a real finding.
+func (r Report) Fixes() []Fix {
+	var out []Fix
 	for _, a := range r.Answers {
-		switch a.State {
-		case StateGood:
-			good++
-		case StateWarn:
-			warn++
-		case StateUnmanaged:
-			unmanaged++
-		default:
-			unknown++
+		if a.Fix == nil {
+			continue
 		}
+		out = append(out, *a.Fix)
 	}
-
-	total := len(r.Answers)
-	switch {
-	case total == 0:
-		return "Nothing was measured."
-	case good == total:
-		return "DNS is under control on this machine."
-	case unknown == total:
-		return "Not enough was reachable to judge this machine."
-	case unmanaged+warn == total-unknown:
-		return "DNS is not being managed on this machine: no resolver is chosen, " +
-			"the path is not covered, and the answers are not checked."
-	default:
-		return fmt.Sprintf("DNS is partly managed: %d of %d checks hold, %d need attention.",
-			good, total, total-good-unknown)
-	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Severity < out[j].Severity })
+	return out
 }
 
 // Build produces the four answers from the measurements.
@@ -196,18 +244,29 @@ func Build(f Facts) Report {
 	}
 }
 
+func unknownAnswer(label, question string, hint, fix string) Answer {
+	return Answer{
+		Label:    label,
+		Question: question,
+		State:    StateUnknown,
+		Hint:     hint,
+		Summary:  hint,
+		Fix:      &Fix{Severity: StateUnknown, Text: fix},
+	}
+}
+
 // answerOwnResolver reports which resolver this machine resolves through.
 func answerOwnResolver(f Facts) Answer {
-	const question = "Do you have your own DNS service?"
+	const (
+		label    = "Own DNS"
+		question = "Do you have your own DNS service?"
+	)
 
 	effective := reachable(f.Resolvers)
 	if len(effective) == 0 {
-		return Answer{
-			Question: question,
-			State:    StateUnknown,
-			Summary:  "No reachable resolver is configured, so nothing was measured.",
-			Advice:   "Restore the network connection, then run the check again.",
-		}
+		return unknownAnswer(label, question,
+			"not measured: no reachable resolver is configured",
+			"Restore the network connection, then run the check again")
 	}
 
 	var public []string
@@ -217,42 +276,77 @@ func answerOwnResolver(f Facts) Answer {
 		}
 	}
 
-	state := StateGood
-	advice := ""
-	summary := "Yes. Resolution runs through " + joinLabels(effective) + "."
+	var (
+		state   = StateGood
+		summary = "Yes. Resolution runs through " + joinLabels(effective) + "."
+		fix     *Fix
+		reasons []string
+	)
 	if len(public) > 0 {
 		state = StateWarn
+		reasons = append(reasons, "a public resolver answers in the clear")
 		summary = "Partly. Resolution runs through " + joinLabels(effective) +
 			". A public resolver answers in the clear for part of the namespace."
-		advice = "Point every network service at the resolver your tunnel provides."
-	}
-	if f.SplitScopedDomains > 0 {
-		summary += fmt.Sprintf(" %d domains are routed to a dedicated resolver.",
-			f.SplitScopedDomains)
+		fix = tunnelResolverFix(f, effective)
 	}
 	if f.TotalServices > 0 && f.ExplicitServices == 0 {
+		reasons = append(reasons, "no service has a hand-set server")
 		summary += " No service has a hand-set server, so the resolver was not chosen here."
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "resolution runs through "+joinLabels(effective))
 	}
 	if len(f.EncryptedProfiles) > 0 {
 		summary += fmt.Sprintf(" An encrypted profile is configured in %s.",
 			sysdns.ResolverDir+" ("+strings.Join(f.EncryptedProfiles, ", ")+")")
 	}
 
-	return Answer{Question: question, State: state, Summary: summary, Advice: advice}
+	return Answer{
+		Label:    label,
+		Question: question,
+		State:    state,
+		Hint:     strings.Join(reasons, "; "),
+		Summary:  summary,
+		Fix:      fix,
+	}
+}
+
+// tunnelResolverFix names the service and the address to write, but only when
+// both are known. A command with a placeholder is worse than no command.
+func tunnelResolverFix(f Facts, effective []ResolverView) *Fix {
+	fix := &Fix{
+		Severity: StateWarn,
+		Text:     "Point every network service at the resolver your tunnel provides",
+	}
+	if len(f.ServiceNames) != 1 {
+		return fix
+	}
+	var local []ResolverView
+	for _, r := range effective {
+		if r.Kind.TunnelLocal() {
+			local = append(local, r)
+		}
+	}
+	if len(local) == 0 {
+		return fix
+	}
+	fix.Command = fmt.Sprintf("networksetup -setdnsservers %q %s",
+		f.ServiceNames[0], local[0].Addr)
+	return fix
 }
 
 // answerProxyCoverage reports whether every lookup leaves through the tunnel.
 func answerProxyCoverage(f Facts) Answer {
-	const question = "Does all DNS go through the proxy?"
+	const (
+		label    = "All DNS via proxy"
+		question = "Does all DNS go through the proxy?"
+	)
 
 	effective := reachable(f.Resolvers)
 	if len(effective) == 0 {
-		return Answer{
-			Question: question,
-			State:    StateUnknown,
-			Summary:  "No reachable resolver is configured, so nothing was measured.",
-			Advice:   "Restore the network connection, then run the check again.",
-		}
+		return unknownAnswer(label, question,
+			"not measured: no reachable resolver is configured",
+			"Restore the network connection, then run the check again")
 	}
 
 	var offTunnel []string
@@ -268,50 +362,81 @@ func answerProxyCoverage(f Facts) Answer {
 		}
 	}
 
-	state := StateGood
-	advice := ""
-	var summary string
-	switch {
-	case len(offTunnel) > 0:
-		state = StateUnmanaged
-		summary = "No. " + joinAnd(offTunnel) +
-			" answers from outside the tunnel exit, so lookups bypass the proxy."
-		advice = "Send this resolver through the tunnel, or remove it from the service."
-	default:
+	var (
+		state   = StateGood
 		summary = "Yes. Lookups leave through " + joinLabels(effective) +
 			", which answers from the tunnel exit."
-		if f.PlaintextUDP {
-			state = StateWarn
-			summary += " Cleartext DNS still completes to a public resolver on port 53."
-			advice = "Block outbound port 53 so only the tunnel resolver stays reachable."
+		fix *Fix
+		// reasons accumulate so a second finding adds to the line instead of
+		// replacing what the first one said.
+		reasons []string
+	)
+	if len(offTunnel) > 0 {
+		state = StateUnmanaged
+		reasons = append(reasons, joinAnd(offTunnel)+" answers from outside the tunnel exit")
+		summary = "No. " + joinAnd(offTunnel) +
+			" answers from outside the tunnel exit, so lookups bypass the proxy."
+		fix = &Fix{
+			Severity: StateUnmanaged,
+			Text:     "Route " + joinAnd(offTunnel) + " through the tunnel, or remove it",
 		}
 	}
+	if f.PlaintextUDP {
+		if fix == nil || fix.Severity > StateWarn {
+			fix = &Fix{
+				Severity: StateWarn,
+				Text:     "Block outbound port 53 so only the tunnel resolver stays reachable",
+			}
+		}
+		reasons = append(reasons, "cleartext DNS completes to a public resolver on port 53")
+		summary += " Cleartext DNS still completes to a public resolver on port 53."
+	}
 	if len(f.IPv6Bypass) > 0 {
-		state = lower(state, StateWarn)
+		reasons = append(reasons, "an IPv6 address is active outside the tunnel")
 		summary += fmt.Sprintf(" An IPv6 address is active outside the tunnel (%s), "+
-			"so a v6 path can bypass it.", strings.Join(f.IPv6Bypass, ", "))
-		advice = "Route IPv6 through the tunnel, or turn it off for that interface."
+			"so a v6 path can bypass it.", joinAnd(f.IPv6Bypass))
+		if fix == nil {
+			fix = &Fix{
+				Severity: StateWarn,
+				Text:     "Route IPv6 through the tunnel, or turn it off for " + f.IPv6Bypass[0],
+			}
+		}
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "lookups leave through "+joinLabels(effective)+" from the tunnel exit")
+	} else {
+		// Only a reason that describes a defect can downgrade the verdict.
+		state = lower(state, StateWarn)
 	}
 
-	return Answer{Question: question, State: state, Summary: summary, Advice: advice}
+	return Answer{
+		Label:    label,
+		Question: question,
+		State:    state,
+		Hint:     strings.Join(reasons, "; "),
+		Summary:  summary,
+		Fix:      fix,
+	}
 }
 
 // answerHijack reports whether unknown names were rewritten into addresses.
 func answerHijack(f Facts) Answer {
-	const question = "Is there DNS hijacking?"
+	const (
+		label    = "DNS hijacking"
+		question = "Is there DNS hijacking?"
+	)
 
 	if len(f.Hijack.Probed) == 0 {
-		return Answer{
-			Question: question,
-			State:    StateUnknown,
-			Summary:  "The reserved-name probe did not complete, so this was not measured.",
-			Advice:   "Run the check again on a network with working resolution.",
-		}
+		return unknownAnswer(label, question,
+			"not measured: the reserved-name probe did not complete",
+			"Run the check again on a network with working resolution")
 	}
 	if !f.Hijack.Hijacked() {
 		return Answer{
+			Label:    label,
 			Question: question,
 			State:    StateGood,
+			Hint:     fmt.Sprintf("none found in %d probes", len(f.Hijack.Probed)),
 			Summary: fmt.Sprintf("None found. %d names that cannot exist all came back without an address.",
 				len(f.Hijack.Probed)),
 		}
@@ -323,25 +448,31 @@ func answerHijack(f Facts) Answer {
 	}
 	sort.Strings(labels)
 	return Answer{
+		Label:    label,
 		Question: question,
 		State:    StateUnmanaged,
+		Hint: fmt.Sprintf("%d of %d names rewritten into addresses",
+			len(f.Hijack.Answers), len(f.Hijack.Probed)),
 		Summary: fmt.Sprintf("Yes. %d of %d names that cannot exist were rewritten into addresses: %s.",
 			len(f.Hijack.Answers), len(f.Hijack.Probed), strings.Join(labels, "; ")),
-		Advice: "Move to a resolver you trust, or point the tunnel at one.",
+		Fix: &Fix{
+			Severity: StateUnmanaged,
+			Text:     "Move to a resolver you trust, or point the tunnel at one",
+		},
 	}
 }
 
 // answerLeak reports whether the names are resolved by someone outside the tunnel.
 func answerLeak(f Facts) Answer {
-	const question = "Is there DNS leakage?"
+	const (
+		label    = "DNS leakage"
+		question = "Is there DNS leakage?"
+	)
 
 	if f.Egress == nil {
-		return Answer{
-			Question: question,
-			State:    StateUnknown,
-			Summary:  "The tunnel exit could not be measured, so there was nothing to compare against.",
-			Advice:   "Restore outbound HTTPS, then run the check again.",
-		}
+		return unknownAnswer(label, question,
+			"not measured: the tunnel exit could not be read",
+			"Restore outbound HTTPS, then run the check again")
 	}
 
 	var leaked, unmeasured []resolverMatch
@@ -361,12 +492,9 @@ func answerLeak(f Facts) Answer {
 		}
 	}
 	if checked == 0 {
-		return Answer{
-			Question: question,
-			State:    StateUnknown,
-			Summary:  "No resolver reported its source address, so leakage was not measured.",
-			Advice:   "Run the check again on a network with working resolution.",
-		}
+		return unknownAnswer(label, question,
+			"not measured: no resolver reported its source address",
+			"Run the check again on a network with working resolution")
 	}
 
 	exit := f.Egress.Addr.String()
@@ -381,16 +509,18 @@ func answerLeak(f Facts) Answer {
 		for _, m := range unmeasured {
 			labels = append(labels, resolverLabel(m.view))
 		}
-		unmeasuredNote = fmt.Sprintf(" The path of %s could not be measured.",
-			joinAnd(labels))
+		unmeasuredNote = fmt.Sprintf(" The path of %s could not be measured.", joinAnd(labels))
 	}
 
 	if len(leaked) == 0 {
+		summary := fmt.Sprintf("None found. Every resolver that reported its source address (%d of %d) "+
+			"answers from the tunnel exit %s.%s", checked, checked+len(unmeasured), exit, unmeasuredNote)
 		return Answer{
+			Label:    label,
 			Question: question,
 			State:    StateGood,
-			Summary: fmt.Sprintf("None found. Every resolver that reported its source address (%d of %d) "+
-				"answers from the tunnel exit %s.%s", checked, checked+len(unmeasured), exit, unmeasuredNote),
+			Hint:     fmt.Sprintf("no leak from %s", pluralResolvers(checked)),
+			Summary:  summary,
 		}
 	}
 
@@ -408,21 +538,38 @@ func answerLeak(f Facts) Answer {
 
 	if sameNetwork == len(leaked) {
 		return Answer{
+			Label:    label,
 			Question: question,
 			State:    StateWarn,
+			Hint:     "resolvers sit in the exit network, in the clear",
 			Summary: fmt.Sprintf("Not outside the tunnel, but not protected. Traffic exits at %s and the resolvers "+
-				"answer from the same network in the clear: %s.%s", exit, joinAnd(parts),
-				unmeasuredNote),
-			Advice: "Encrypt the resolver with DoH or DoT so the network operator cannot read queries.",
+				"answer from the same network in the clear: %s.%s", exit, joinAnd(parts), unmeasuredNote),
+			Fix: &Fix{
+				Severity: StateWarn,
+				Text:     "Encrypt the resolver with DoH or DoT",
+			},
 		}
 	}
 	return Answer{
+		Label:    label,
 		Question: question,
 		State:    StateUnmanaged,
+		Hint:     joinAnd(parts) + " answer from outside the tunnel",
 		Summary: fmt.Sprintf("Yes. Traffic exits at %s, but these resolvers answer from a different source: %s.%s",
 			exit, joinAnd(parts), unmeasuredNote),
-		Advice: "Route these resolvers through the tunnel so the exit and the resolver agree.",
+		Fix: &Fix{
+			Severity: StateUnmanaged,
+			Text:     "Route these resolvers through the tunnel so the exit and the resolver agree",
+		},
 	}
+}
+
+// lower returns the worse of two states.
+func lower(a, b State) State {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // resolverMatch pairs a resolver with the network its answers come from.
@@ -469,6 +616,14 @@ func joinAnd(parts []string) string {
 	}
 }
 
+// pluralResolvers renders a resolver count as a noun phrase.
+func pluralResolvers(n int) string {
+	if n == 1 {
+		return "1 resolver"
+	}
+	return fmt.Sprintf("%d resolvers", n)
+}
+
 // resolverLabel renders a resolver with the fact that matters for it.
 func resolverLabel(r ResolverView) string {
 	label := sysdns.DescribeServer(r.Addr)
@@ -489,12 +644,4 @@ func joinAddrs(addrs []netip.Addr) string {
 		parts = append(parts, a.String())
 	}
 	return strings.Join(parts, ", ")
-}
-
-// lower returns the worse of two states.
-func lower(a, b State) State {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -50,6 +50,17 @@ func (r Resolver) HasFlag(name string) bool {
 	return false
 }
 
+// Service is one enabled network service and the DNS servers set on it.
+//
+// The type is declared here rather than beside the reader that fills it in,
+// because the build has to resolve the signature on every platform.
+type Service struct {
+	// Name is the network service name as networksetup knows it.
+	Name string
+	// Servers are the configured DNS server addresses, as written.
+	Servers []string
+}
+
 // Config is the parsed resolver state of one machine.
 type Config struct {
 	// Resolvers holds every resolver from both scutil sections.

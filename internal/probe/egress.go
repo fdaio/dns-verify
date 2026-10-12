@@ -23,6 +23,11 @@ type Egress struct {
 	Site string
 }
 
+// egressAttempts is how many times the trace request is sent. Every other
+// verdict is compared against the exit address, so one refused connection must
+// not leave the run unable to say anything about the machine.
+const egressAttempts = 3
+
 // EgressAddr determines the source address of ordinary HTTPS traffic.
 //
 // The request must follow the proxy that macOS applies, otherwise the measured
@@ -30,9 +35,10 @@ type Egress struct {
 // and the comparison between the two is meaningless.
 func EgressAddr(ctx context.Context) (Egress, error) {
 	transport := &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		DialContext:         (&net.Dialer{Timeout: defaultTimeout}).DialContext,
-		TLSHandshakeTimeout: defaultTimeout,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: defaultTimeout}).DialContext,
+		TLSHandshakeTimeout:   defaultTimeout,
+		ResponseHeaderTimeout: defaultTimeout,
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -42,6 +48,18 @@ func EgressAddr(ctx context.Context) (Egress, error) {
 		},
 	}
 
+	var err error
+	for range egressAttempts {
+		addr, attemptErr := egressOnce(ctx, client)
+		if attemptErr == nil {
+			return addr, nil
+		}
+		err = attemptErr
+	}
+	return Egress{}, err
+}
+
+func egressOnce(ctx context.Context, client *http.Client) (Egress, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, traceURL, nil)
 	if err != nil {
 		return Egress{}, err
@@ -65,11 +83,9 @@ func EgressAddr(ctx context.Context) (Egress, error) {
 		if !ok {
 			continue
 		}
-		addr, parsed := parseIPField(value)
-		if !parsed {
-			continue
+		if addr, parsed := parseIPField(value); parsed {
+			return Egress{Addr: addr, Site: "cloudflare.com"}, nil
 		}
-		return Egress{Addr: addr, Site: "cloudflare.com"}, nil
 	}
 	return Egress{}, fmt.Errorf("egress trace: no address in response")
 }

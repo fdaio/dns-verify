@@ -20,15 +20,13 @@ func System(ctx context.Context) (Config, error) {
 }
 
 // ExplicitServers reports the DNS servers set on each enabled network service.
-// A service with no entry inherits whatever the network hands out, which is the
-// difference between a chosen resolver and an imposed one.
-func ExplicitServers(ctx context.Context) (map[string][]string, error) {
+func ExplicitServers(ctx context.Context) ([]Service, error) {
 	out, err := run(ctx, "networksetup", "-listallnetworkservices")
 	if err != nil {
 		return nil, err
 	}
 
-	result := make(map[string][]string)
+	var services []Service
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -44,12 +42,12 @@ func ExplicitServers(ctx context.Context) (map[string][]string, error) {
 		if err != nil {
 			continue
 		}
-		result[name] = serversFromNetworksetup(value)
+		services = append(services, Service{Name: name, Servers: serversFromNetworksetup(value)})
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("networksetup -listallnetworkservices: %w", err)
 	}
-	return result, nil
+	return services, nil
 }
 
 // serversFromNetworksetup drops the sentence networksetup prints when a

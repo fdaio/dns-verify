@@ -79,10 +79,27 @@ func firstTXT(resp *dns.Msg) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
+// echoAttempts is how many times an echo query is sent before the resolver is
+// declared unmeasured. The query travels over UDP, so a single lost datagram
+// must not turn a resolver that answers fine into one the report cannot judge.
+const echoAttempts = 3
+
 // ResolverEcho asks a resolver which source address it sees. The resolver
 // answers, so the value is where the resolver's own path to the internet
 // starts, which is the path every lookup through it takes.
 func ResolverEcho(ctx context.Context, r Resolver) (netip.Addr, error) {
+	var err error
+	for range echoAttempts {
+		addr, attemptErr := resolverEchoOnce(ctx, r)
+		if attemptErr == nil {
+			return addr, nil
+		}
+		err = attemptErr
+	}
+	return netip.Addr{}, err
+}
+
+func resolverEchoOnce(ctx context.Context, r Resolver) (netip.Addr, error) {
 	msg := newMsg("whoami.cloudflare", dns.TypeTXT)
 	msg.Question[0].Qclass = dns.ClassCHAOS
 
@@ -100,6 +117,18 @@ func ResolverEcho(ctx context.Context, r Resolver) (netip.Addr, error) {
 // the recursion. A local forwarder answers with its own upstream resolver, so
 // the result names the machine that really resolved the name.
 func RecursiveEcho(ctx context.Context, r Resolver) (netip.Addr, error) {
+	var err error
+	for range echoAttempts {
+		addr, attemptErr := recursiveEchoOnce(ctx, r)
+		if attemptErr == nil {
+			return addr, nil
+		}
+		err = attemptErr
+	}
+	return netip.Addr{}, err
+}
+
+func recursiveEchoOnce(ctx context.Context, r Resolver) (netip.Addr, error) {
 	resp, err := r.exchange(ctx, "udp", newMsg("o-o.myaddr.l.google.com", dns.TypeTXT))
 	if err != nil {
 		return netip.Addr{}, err
