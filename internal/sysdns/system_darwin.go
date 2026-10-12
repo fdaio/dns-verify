@@ -19,16 +19,6 @@ func System(ctx context.Context) (Config, error) {
 	return Parse(out)
 }
 
-// Service is one enabled network service and the DNS servers set on it. An
-// empty server list means the service inherits whatever the network hands out,
-// which is the difference between a chosen resolver and an imposed one.
-type Service struct {
-	// Name is the network service name as networksetup knows it.
-	Name string
-	// Servers are the configured DNS server addresses, as written.
-	Servers []string
-}
-
 // ExplicitServers reports the DNS servers set on each enabled network service.
 func ExplicitServers(ctx context.Context) ([]Service, error) {
 	out, err := run(ctx, "networksetup", "-listallnetworkservices")
