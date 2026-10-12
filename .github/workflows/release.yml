@@ -14,9 +14,11 @@ permissions:
   contents: write
 
 jobs:
-  test:
+  # The job is named for what it does on each platform, because it runs there.
+  # A job that needs itself is rejected when the workflow graph is built, so the
+  # name must stay distinct from anything that depends on it.
+  test-platform:
     name: test (${{ matrix.os }})
-    needs: [ test ]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
     strategy:
@@ -57,7 +59,7 @@ jobs:
 
   build:
     name: build (${{ matrix.os }}/${{ matrix.arch }})
-    needs: [ test ]
+    needs: [ test-platform ]
     runs-on: ${{ matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
     strategy:
       # Cancelling the sibling on the first failure hides that architecture's

@@ -7,7 +7,7 @@ GOFLAGS := -trimpath
 VERSION ?= dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build test lint fmt clean
+.PHONY: all build test lint fmt check clean
 
 all: build
 
@@ -22,6 +22,11 @@ lint:
 
 fmt:
 	go fmt ./...
+
+# GitHub rejects a workflow whose job graph is broken before any job runs, and
+# nothing in a build catches that, so it is checked here.
+check:
+	go run ./cmd/workflowcheck
 
 clean:
 	rm -f $(BINARY)
