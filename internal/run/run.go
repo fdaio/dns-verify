@@ -35,7 +35,8 @@ var escapeResolvers = []netip.Addr{
 // method must be safe to call on a nil Observer, which is how the check runs
 // when the output cannot show anything.
 type Observer interface {
-	// Start names a stage and says how many steps it has.
+	// Start names a stage. total is the size of the whole run, not of the
+	// stage, so a caller can lay the progress line out against one figure.
 	Start(label string, total int)
 	// Advance completes one step of the current stage.
 	Advance()
@@ -47,9 +48,20 @@ type nopObserver struct{}
 func (nopObserver) Start(string, int) {}
 func (nopObserver) Advance()          {}
 
-// Run performs the check and returns the assembled report.
-func Run(ctx context.Context) (analyze.Report, error) {
-	return RunWith(ctx, nil)
+// stageSizes are the labels and the step counts of a run, kept together so the
+// total can be computed before the first stage starts.
+type stageSizes struct {
+	config   int
+	egress   int
+	resolver int
+	hijack   int
+	origins  int
+}
+
+// total is the number of steps a run performs. The progress bar is drawn
+// against it, so it must match what the stages actually advance.
+func (s stageSizes) total() int {
+	return s.config + s.egress + s.resolver + s.hijack + s.origins
 }
 
 // RunWith performs the check and reports each stage to the observer.
@@ -58,7 +70,9 @@ func RunWith(ctx context.Context, obs Observer) (analyze.Report, error) {
 		obs = nopObserver{}
 	}
 
-	obs.Start("reading DNS configuration", 1)
+	// The number of resolvers is not known yet, so this stage reports no
+	// total and the counter stays off until the next stage.
+	obs.Start("reading DNS configuration", 0)
 	cfg, err := sysdns.System(ctx)
 	if err != nil {
 		return analyze.Report{}, err
@@ -76,22 +90,45 @@ func RunWith(ctx context.Context, obs Observer) (analyze.Report, error) {
 		facts.IPv6Bypass = addrs
 	}
 
+	targets := hijackTargets(facts.Resolvers)
+	sizes := stageSizes{
+		config:   1,
+		egress:   1,
+		resolver: len(facts.Resolvers),
+		hijack:   len(targets),
+		origins:  1,
+	}
+	total := sizes.total()
+
 	// The exit address is the reference every other measurement is compared to,
 	// so it starts first.
-	obs.Start("measuring the tunnel exit", 1)
+	obs.Start("measuring the tunnel exit", total)
 	if egress, err := probe.EgressAddr(ctx); err == nil {
 		facts.Egress = &egress
 	}
 	obs.Advance()
 
-	results := measureResolvers(ctx, facts.Resolvers, obs)
+	results := measureResolvers(ctx, facts.Resolvers, total, obs)
 	applyResolverResults(&facts, results)
 
 	measureEscape(ctx, &facts)
-	measureHijack(ctx, facts.Resolvers, &facts, obs)
-	measureOrigins(ctx, &facts, obs)
+	measureHijack(ctx, targets, &facts, total, obs)
+	measureOrigins(ctx, &facts, total, obs)
 
 	return analyze.Build(facts), nil
+}
+
+// hijackTargets returns the resolvers that get a reserved-name probe.
+func hijackTargets(views []analyze.ResolverView) []analyze.ResolverView {
+	seen := make(map[netip.Addr]bool)
+	var out []analyze.ResolverView
+	for _, view := range views {
+		if view.Reachable && !seen[view.Addr] {
+			seen[view.Addr] = true
+			out = append(out, view)
+		}
+	}
+	return out
 }
 
 // resolverViews converts the system configuration into the analysis view. The
@@ -167,8 +204,9 @@ type measurement struct {
 
 // measureResolvers probes every resolver at once. A run costs several network
 // round trips, and a dead resolver must not delay the rest of the report.
-func measureResolvers(ctx context.Context, views []analyze.ResolverView, obs Observer) []measurement {
-	obs.Start("asking resolvers for their source address", len(views))
+func measureResolvers(ctx context.Context, views []analyze.ResolverView,
+	total int, obs Observer) []measurement {
+	obs.Start("asking resolvers for their source address", total)
 
 	results := make([]measurement, len(views))
 	var wg sync.WaitGroup
@@ -242,18 +280,9 @@ func measureEscape(ctx context.Context, facts *analyze.Facts) {
 }
 
 // measureHijack sends unresolvable names through every reachable resolver.
-func measureHijack(ctx context.Context, views []analyze.ResolverView,
-	facts *analyze.Facts, obs Observer) {
-	seen := make(map[netip.Addr]bool)
-	targets := make([]analyze.ResolverView, 0, len(views))
-	for _, view := range views {
-		if view.Reachable && !seen[view.Addr] {
-			seen[view.Addr] = true
-			targets = append(targets, view)
-		}
-	}
-
-	obs.Start("probing for hijacked answers", len(targets))
+func measureHijack(ctx context.Context, targets []analyze.ResolverView,
+	facts *analyze.Facts, total int, obs Observer) {
+	obs.Start("probing for hijacked answers", total)
 	for _, view := range targets {
 		result, err := probe.Hijack(ctx, probe.Resolver{Addr: view.Addr, Port: view.Port}, hijackProbes)
 		if err == nil {
@@ -268,7 +297,10 @@ func measureHijack(ctx context.Context, views []analyze.ResolverView,
 
 // measureOrigins records the network each observed address belongs to, so the
 // report can say whether a resolver sits with the tunnel operator or elsewhere.
-func measureOrigins(ctx context.Context, facts *analyze.Facts, obs Observer) {
+//
+// The lookups run together and report as one step, because their number is only
+// known once the resolvers have answered.
+func measureOrigins(ctx context.Context, facts *analyze.Facts, total int, obs Observer) {
 	seen := make(map[netip.Addr]bool)
 	collect := func(addr netip.Addr) {
 		if !addr.IsValid() || seen[addr] {
@@ -278,7 +310,7 @@ func measureOrigins(ctx context.Context, facts *analyze.Facts, obs Observer) {
 		measureOrigin(ctx, facts, addr)
 	}
 
-	obs.Start("looking up the network of each address", len(seen)+1)
+	obs.Start("looking up the network of each address", total)
 	if facts.Egress != nil {
 		collect(facts.Egress.Addr)
 	}

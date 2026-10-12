@@ -36,8 +36,12 @@ implying a result.
 While the check runs, a single line shows what it is doing:
 
 ```
-⠹ asking resolvers for their source address 1/3  ████████░░░░░░░░░░
+⠹ ████████░░░░░░░░░░  asking resolvers for their source address  4/9
 ```
+
+The bar covers the whole run, not the current stage, so it only ever moves
+forward. The bar has a fixed width and the stage name starts on a fixed column,
+so only the text at the end of the line changes as the run goes on.
 
 The line is erased before the report prints, so nothing is left behind when the
 run ends, fails or is interrupted.
