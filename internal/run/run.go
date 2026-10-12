@@ -48,10 +48,9 @@ type nopObserver struct{}
 func (nopObserver) Start(string, int) {}
 func (nopObserver) Advance()          {}
 
-// stageSizes are the labels and the step counts of a run, kept together so the
-// total can be computed before the first stage starts.
+// stageSizes are the step counts of the parts of a run that are watched, kept
+// together so the total can be computed before the first stage starts.
 type stageSizes struct {
-	config   int
 	egress   int
 	resolver int
 	hijack   int
@@ -61,7 +60,7 @@ type stageSizes struct {
 // total is the number of steps a run performs. The progress bar is drawn
 // against it, so it must match what the stages actually advance.
 func (s stageSizes) total() int {
-	return s.config + s.egress + s.resolver + s.hijack + s.origins
+	return s.egress + s.resolver + s.hijack + s.origins
 }
 
 // RunWith performs the check and reports each stage to the observer.
@@ -70,14 +69,14 @@ func RunWith(ctx context.Context, obs Observer) (analyze.Report, error) {
 		obs = nopObserver{}
 	}
 
-	// The number of resolvers is not known yet, so this stage reports no
-	// total and the counter stays off until the next stage.
-	obs.Start("reading DNS configuration", 0)
+	// The configuration is read before the progress line starts. It is a local
+	// command that answers in well under a tenth of a second, and the number of
+	// resolvers it returns is what the total is built from, so the first frame
+	// already carries a count that will not change width.
 	cfg, err := sysdns.System(ctx)
 	if err != nil {
 		return analyze.Report{}, err
 	}
-	obs.Advance()
 
 	facts := analyze.Facts{
 		Origins:   make(map[string]probe.Origin),
@@ -90,15 +89,12 @@ func RunWith(ctx context.Context, obs Observer) (analyze.Report, error) {
 		facts.IPv6Bypass = addrs
 	}
 
-	targets := hijackTargets(facts.Resolvers)
-	sizes := stageSizes{
-		config:   1,
+	total := stageSizes{
 		egress:   1,
 		resolver: len(facts.Resolvers),
-		hijack:   len(targets),
+		hijack:   len(hijackTargets(facts.Resolvers)),
 		origins:  1,
-	}
-	total := sizes.total()
+	}.total()
 
 	// The exit address is the reference every other measurement is compared to,
 	// so it starts first.
@@ -112,7 +108,7 @@ func RunWith(ctx context.Context, obs Observer) (analyze.Report, error) {
 	applyResolverResults(&facts, results)
 
 	measureEscape(ctx, &facts)
-	measureHijack(ctx, targets, &facts, total, obs)
+	measureHijack(ctx, hijackTargets(facts.Resolvers), &facts, total, obs)
 	measureOrigins(ctx, &facts, total, obs)
 
 	return analyze.Build(facts), nil

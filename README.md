@@ -5,6 +5,7 @@ ten, four verdicts, and what to do next.
 
 ```
 $ dns-verify
+⠹ ██████████░░░░░░░░░░ 4/8  probing for hijacked answers
 DNS VERIFY                                        8/10  PARTLY MANAGED
 
 1  Own DNS .............      warn  a public resolver answers in the clear; no service has a hand-set server
