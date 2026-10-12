@@ -1,0 +1,112 @@
+# Tag-driven release. A v* tag produces one archive per macOS architecture.
+#
+# macOS only: the check reads the merged SystemConfiguration state, which no
+# other platform exposes, so a binary for another system would refuse to run.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Build the stamped binary
+        run: make build VERSION="${GITHUB_REF_NAME}"
+
+      - name: Check the stamped version
+        run: |
+          got=$(./dns-verify --version)
+          want="dns-verify ${GITHUB_REF_NAME}"
+          if [ "$got" != "$want" ]; then
+            echo "version is '$got', want '$want'"
+            exit 1
+          fi
+
+  build:
+    name: build (darwin/${{ matrix.arch }})
+    needs: [ test ]
+    runs-on: macos-latest
+    strategy:
+      # Cancelling the sibling on the first failure hides that architecture's
+      # result, which is how a release once shipped with a missing binary.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+          - arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: darwin
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p staging
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o staging/dns-verify ./cmd/dns-verify
+          archive="dns-verify_${GITHUB_REF_NAME}_darwin_${{ matrix.arch }}.tar.gz"
+          tar czf "$archive" -C staging dns-verify
+          # An archive holding the wrong file installs silently and fails at run
+          # time, so the contents are checked before it ships.
+          contents=$(tar tzf "$archive")
+          if [ "$contents" != "dns-verify" ]; then
+            echo "archive holds '$contents', want exactly 'dns-verify'"
+            exit 1
+          fi
+          echo "built $archive"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: dns-verify_darwin_${{ matrix.arch }}
+          path: dns-verify_*.tar.gz
+          # A path that matches nothing leaves an empty artifact and the job
+          # still passes, which is how a release once shipped with no binary.
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: archives
+          merge-multiple: true
+
+      - name: List the archives
+        run: ls -l archives
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: archives/*.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: false

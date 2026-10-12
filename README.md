@@ -63,15 +63,6 @@ Both colour and the progress line need a terminal, and both are off otherwise:
 A stream that cannot show them receives no escape sequence at all, so a report
 redirected to a file stays byte for byte the plain text.
 
-## Flags
-
-| Flag | Effect |
-|------|--------|
-| `-v` | Add the measurements behind each verdict |
-| `--fail-under N` | Exit 1 when the score is below N (0 to 10) |
-
-A plain run always exits 0. The threshold is only there for a gate.
-
 ## Score
 
 The ten points are split evenly over the four questions, 2.5 each. Every
@@ -111,6 +102,20 @@ than to read.
 
 ## Install
 
+Download the archive for your architecture, `arm64` on Apple silicon and
+`amd64` on Intel:
+
+```sh
+VERSION=v0.1.0
+ARCH=arm64                                    # or amd64
+curl -fsSLO "https://github.com/fdaio/dns-verify/releases/download/${VERSION}/dns-verify_${VERSION}_darwin_${ARCH}.tar.gz"
+tar xzf "dns-verify_${VERSION}_darwin_${ARCH}.tar.gz"
+sudo install -m 0755 dns-verify /usr/local/bin/
+dns-verify --version
+```
+
+Or build it yourself:
+
 ```sh
 git clone https://github.com/fdaio/dns-verify
 cd dns-verify
@@ -119,10 +124,21 @@ make build
 
 The result is a single `dns-verify` binary.
 
+## Flags
+
+| Flag | Effect |
+|------|--------|
+| `--version` | Print the release the binary was built from |
+| `-v` | Add the measurements behind each verdict |
+| `--fail-under N` | Exit 1 when the score is below N (0 to 10) |
+
+A plain run always exits 0. The threshold is only there for a gate.
+
 ## Requirements
 
 macOS. The tool reads the merged SystemConfiguration state, which no other
-platform exposes the same way. Running it elsewhere exits with an error.
+platform exposes the same way. Running it elsewhere exits with an error, which
+is why a release carries no binary for another system.
 
 ## Development
 
