@@ -58,7 +58,7 @@ func TestEverythingControlledScoresTen(t *testing.T) {
 	if got := r.Score(); got != 10 {
 		t.Errorf("Score() = %d, want 10", got)
 	}
-	if got := r.Grade(); got != "UNDER CONTROL" {
+	if got := r.Grade().String(); got != "UNDER CONTROL" {
 		t.Errorf("Grade() = %q, want UNDER CONTROL", got)
 	}
 	if got := r.NotMeasured(); got != 0 {
@@ -99,7 +99,7 @@ func TestNothingManagedFallsBackToUnmanaged(t *testing.T) {
 			t.Errorf("question %d = %v (%s), want %v", i+1, a.State, a.Summary, wantState[i])
 		}
 	}
-	if got := r.Grade(); got != "NOT MANAGED" {
+	if got := r.Grade().String(); got != "NOT MANAGED" {
 		t.Errorf("Grade() = %q, want NOT MANAGED", got)
 	}
 	// warn=1.5, the other three earn nothing.
@@ -118,7 +118,7 @@ func TestWarnLosesOnePoint(t *testing.T) {
 	if got := r.Score(); got != 9 {
 		t.Errorf("Score() = %d, want 9", got)
 	}
-	if got := r.Grade(); got != "PARTLY MANAGED" {
+	if got := r.Grade().String(); got != "PARTLY MANAGED" {
 		t.Errorf("Grade() = %q, want PARTLY MANAGED", got)
 	}
 }
@@ -135,7 +135,7 @@ func TestUnmeasuredQuestionScoresNothing(t *testing.T) {
 	if got := r.NotMeasured(); got != 1 {
 		t.Errorf("NotMeasured() = %d, want 1", got)
 	}
-	if got := r.Grade(); got != "INCONCLUSIVE" {
+	if got := r.Grade().String(); got != "INCONCLUSIVE" {
 		t.Errorf("Grade() = %q, want INCONCLUSIVE", got)
 	}
 }
