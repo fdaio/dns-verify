@@ -42,7 +42,7 @@ func Report(w io.Writer, r analyze.Report, opts Options) error {
 	writeFixes(w, r, opts)
 	if !opts.Verbose {
 		fmt.Fprintln(w)
-		term.PlainLine(w, opts.Style.Dim("Run with -v for the measurements behind these verdicts."))
+		fmt.Fprintln(w, opts.Style.Dim("Run with -v for the measurements behind these verdicts."))
 		return nil
 	}
 	writeDetails(w, r, opts)
@@ -111,7 +111,7 @@ func writeAnswers(w io.Writer, r analyze.Report, opts Options) {
 func writeFixes(w io.Writer, r analyze.Report, opts Options) {
 	fixes := r.Fixes()
 	if len(fixes) == 0 {
-		term.PlainLine(w, opts.Style.Level(term.LevelGood, "Nothing to fix."))
+		fmt.Fprintln(w, opts.Style.Level(term.LevelGood, "Nothing to fix."))
 		return
 	}
 
@@ -119,7 +119,7 @@ func writeFixes(w io.Writer, r analyze.Report, opts Options) {
 	if len(fixes) > maxFixes {
 		heading += " " + opts.Style.Dim(fmt.Sprintf("(%d more in -v)", len(fixes)-maxFixes))
 	}
-	term.PlainLine(w, heading)
+	fmt.Fprintln(w, heading)
 	for i, fix := range fixes {
 		if i >= maxFixes {
 			return
@@ -164,7 +164,7 @@ func writeDetails(w io.Writer, r analyze.Report, opts Options) {
 	f := r.Facts
 
 	fmt.Fprintln(w)
-	term.PlainLine(w, opts.Style.Bold("MEASUREMENTS"))
+	fmt.Fprintln(w, opts.Style.Bold("MEASUREMENTS"))
 	fmt.Fprintln(w, strings.Repeat("-", titleWidth))
 
 	for i, a := range r.Answers {
@@ -174,7 +174,7 @@ func writeDetails(w io.Writer, r analyze.Report, opts Options) {
 	}
 
 	fmt.Fprintln(w)
-	term.PlainLine(w, opts.Style.Bold("TUNNEL EXIT"))
+	fmt.Fprintln(w, opts.Style.Bold("TUNNEL EXIT"))
 	if f.Egress == nil {
 		fmt.Fprintln(w, "  not measured")
 	} else {
@@ -186,7 +186,7 @@ func writeDetails(w io.Writer, r analyze.Report, opts Options) {
 	}
 
 	fmt.Fprintln(w)
-	term.PlainLine(w, opts.Style.Bold("RESOLVERS"))
+	fmt.Fprintln(w, opts.Style.Bold("RESOLVERS"))
 	if len(f.Resolvers) == 0 {
 		fmt.Fprintln(w, "  none found")
 	}
@@ -200,7 +200,7 @@ func writeDetails(w io.Writer, r analyze.Report, opts Options) {
 	}
 
 	fmt.Fprintln(w)
-	term.PlainLine(w, opts.Style.Bold("PROBES"))
+	fmt.Fprintln(w, opts.Style.Bold("PROBES"))
 	fmt.Fprintf(w, "  hijack      %s\n", hijackNotes(f))
 	fmt.Fprintf(w, "  cleartext   udp %s, tcp %s\n", reachable(f.PlaintextUDP), reachable(f.PlaintextTCP))
 	fmt.Fprintf(w, "  fake-ip     %s\n", yesNo(fakeIP(f)))

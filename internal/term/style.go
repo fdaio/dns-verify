@@ -1,7 +1,6 @@
 package term
 
 import (
-	"io"
 	"strings"
 )
 
@@ -102,9 +101,4 @@ func bar(percent, width int) string {
 		sb.WriteString(glyphEmpty)
 	}
 	return sb.String()
-}
-
-// writeLine writes a whole line, replacing whatever the progress line left.
-func writeLine(w io.Writer, text string) {
-	_, _ = io.WriteString(w, text+"\n")
 }

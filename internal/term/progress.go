@@ -3,7 +3,6 @@ package term
 import (
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"time"
 )
@@ -177,7 +176,3 @@ func (t *Ticker) Stop() {
 	}
 	close(t.stop)
 }
-
-// PlainLine writes a line to a stream without any terminal handling. The check
-// uses it for the report itself.
-func PlainLine(w io.Writer, text string) { writeLine(w, strings.TrimRight(text, "\n")) }
