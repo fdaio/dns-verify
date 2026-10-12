@@ -72,13 +72,18 @@ jobs:
             -o staging/dns-verify ./cmd/dns-verify
           archive="dns-verify_${GITHUB_REF_NAME}_darwin_${{ matrix.arch }}.tar.gz"
           tar czf "$archive" -C staging dns-verify
+          # A second copy without the version, so that the documented download
+          # URL keeps working after the next release renames its own assets.
+          cp "$archive" "dns-verify_darwin_${{ matrix.arch }}.tar.gz"
           # An archive holding the wrong file installs silently and fails at run
           # time, so the contents are checked before it ships.
-          contents=$(tar tzf "$archive")
-          if [ "$contents" != "dns-verify" ]; then
-            echo "archive holds '$contents', want exactly 'dns-verify'"
-            exit 1
-          fi
+          for a in "$archive" "dns-verify_darwin_${{ matrix.arch }}.tar.gz"; do
+            contents=$(tar tzf "$a")
+            if [ "$contents" != "dns-verify" ]; then
+              echo "$a holds '$contents', want exactly 'dns-verify'"
+              exit 1
+            fi
+          done
           echo "built $archive"
 
       - name: Upload archive
