@@ -26,6 +26,10 @@ import (
 // this only stops a run that hangs on an unresponsive system call.
 const checkTimeout = 90 * time.Second
 
+// version is the release the binary was built from. The release build overrides
+// it with the tag through -ldflags, so the number cannot drift from the tag.
+var version = "dev"
+
 // checker performs one full check. Taking it as a parameter keeps the flags and
 // the exit code testable without a network.
 type checker func(context.Context) (analyze.Report, error)
@@ -37,6 +41,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "dns-verify: %s is not supported, this check reads macOS DNS state\n",
 			runtime.GOOS)
 		os.Exit(2)
+	}
+
+	// The version is asked for before the terminal is touched, so it works the
+	// same in a pipeline as on a terminal.
+	if showVersion(os.Args[1:]) {
+		fmt.Println("dns-verify", version)
+		return
 	}
 
 	env := term.Detect(os.Stdout, os.LookupEnv)
@@ -54,6 +65,25 @@ func main() {
 			return run.RunWith(ctx, progress)
 		},
 		progress.Finished))
+}
+
+// showVersion reports whether the arguments ask only for the version. It is
+// checked before the flag set is built, because the flag package prints usage
+// and exits on an unknown flag.
+func showVersion(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "-version", "--version":
+			return true
+		case "-h", "--help":
+			return false
+		default:
+			if arg != "" && arg[0] == '-' {
+				return false
+			}
+		}
+	}
+	return false
 }
 
 func realMain(args []string, stdout, stderr io.Writer, env term.Env, check checker, clear func()) int {

@@ -177,6 +177,42 @@ func TestProgressIsClearedBeforeTheReport(t *testing.T) {
 	}
 }
 
+// The version is answered before the terminal is touched, so a pipeline can ask
+// for it without drawing a progress line.
+func TestShowVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"long flag", []string{"--version"}, true},
+		{"short flag", []string{"-version"}, true},
+		{"no arguments", nil, false},
+		{"verbose", []string{"-v"}, false},
+		{"help", []string{"-h"}, false},
+		{"unknown flag", []string{"--nope"}, false},
+		{"stray argument", []string{"extra"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := showVersion(c.args); got != c.want {
+				t.Errorf("showVersion(%v) = %v, want %v", c.args, got, c.want)
+			}
+		})
+	}
+}
+
+// The version must read as the tag the release was cut from. It is set by the
+// linker, so the default only proves the flag reaches it.
+func TestVersionIsStamped(t *testing.T) {
+	if version == "" {
+		t.Fatal("the version must never be empty")
+	}
+	if !showVersion([]string{"--version"}) {
+		t.Error("--version must be recognised")
+	}
+}
+
 // callOrder records the sequence in which the command ran its parts.
 type callOrder struct {
 	calls []string
