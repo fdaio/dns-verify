@@ -12,6 +12,7 @@ import (
 
 	"github.com/fdaio/dns-verify/internal/analyze"
 	"github.com/fdaio/dns-verify/internal/sysdns"
+	"github.com/fdaio/dns-verify/internal/term"
 )
 
 const (
@@ -26,76 +27,154 @@ const (
 	maxFixes = 3
 )
 
-// Report writes the report. The detailed measurement block is written only when
-// verbose is set.
-func Report(w io.Writer, r analyze.Report, verbose bool) error {
-	writeHeader(w, r)
-	writeAnswers(w, r)
-	writeFixes(w, r)
-	if !verbose {
-		fmt.Fprintln(w, "\nRun with -v for the measurements behind these verdicts.")
+// Options controls the presentation of one report.
+type Options struct {
+	// Style colours the status, the grade and the score.
+	Style term.Style
+	// Verbose adds the measurements behind each verdict.
+	Verbose bool
+}
+
+// Report writes the report.
+func Report(w io.Writer, r analyze.Report, opts Options) error {
+	writeHeader(w, r, opts)
+	writeAnswers(w, r, opts)
+	writeFixes(w, r, opts)
+	if !opts.Verbose {
+		fmt.Fprintln(w)
+		term.PlainLine(w, opts.Style.Dim("Run with -v for the measurements behind these verdicts."))
 		return nil
 	}
-	writeDetails(w, r)
+	writeDetails(w, r, opts)
 	return nil
 }
 
-func writeHeader(w io.Writer, r analyze.Report) {
-	title := "DNS VERIFY"
-	score := fmt.Sprintf("%d/%d  %s", r.Score(), analyze.MaxScore, r.Grade())
-	if n := r.NotMeasured(); n > 0 {
-		score += fmt.Sprintf("  (%d NOT MEASURED)", n)
+// levelOf maps a verdict onto the palette. The state word is the fastest thing
+// to scan in a column, so it carries the colour rather than the sentence next
+// to it.
+func levelOf(state analyze.State) term.Level {
+	switch state {
+	case analyze.StateGood:
+		return term.LevelGood
+	case analyze.StateWarn:
+		return term.LevelWarn
+	case analyze.StateUnmanaged:
+		return term.LevelBad
+	default:
+		return term.LevelMuted
 	}
-	fmt.Fprintf(w, "%s%s\n\n", title, padLeft(titleWidth, score))
 }
 
-func writeAnswers(w io.Writer, r analyze.Report) {
+func levelOfGrade(grade analyze.Grade) term.Level {
+	switch grade {
+	case analyze.GradeGood:
+		return term.LevelGood
+	case analyze.GradePartial:
+		return term.LevelWarn
+	case analyze.GradePoor:
+		return term.LevelBad
+	default:
+		return term.LevelMuted
+	}
+}
+
+func writeHeader(w io.Writer, r analyze.Report, opts Options) {
+	grade := r.Grade()
+	level := levelOfGrade(grade)
+	// The score carries the colour of its grade, because the two always agree
+	// and the reader is scanning for one or the other.
+	scorePlain := fmt.Sprintf("%d/%d", r.Score(), analyze.MaxScore)
+	headlinePlain := scorePlain + "  " + grade.String()
+
+	headline := opts.Style.Level(level, scorePlain) + "  " + opts.Style.Level(level, grade.String())
+	if n := r.NotMeasured(); n > 0 {
+		note := fmt.Sprintf("(%d NOT MEASURED)", n)
+		headlinePlain += "  " + note
+		headline += "  " + opts.Style.Dim(note)
+	}
+	title := opts.Style.Bold("DNS VERIFY")
+	fmt.Fprintf(w, "%s%s\n\n", title, padStyled(titleWidth, headlinePlain, headline))
+}
+
+func writeAnswers(w io.Writer, r analyze.Report, opts Options) {
 	for i, a := range r.Answers {
+		// The padding is measured on the plain word, because escape sequences
+		// take bytes the column must not count.
+		state := padStyled(stateWidth, a.State.String(),
+			opts.Style.Level(levelOf(a.State), a.State.String()))
 		fmt.Fprintf(w, "%d  %s %s  %s\n",
-			i+1, leader(a.Label, labelWidth), padLeft(stateWidth, a.State.String()), a.Hint)
+			i+1, leader(a.Label, labelWidth), state, opts.Style.Dim(a.Hint))
 	}
 	fmt.Fprintln(w)
 }
 
-func writeFixes(w io.Writer, r analyze.Report) {
+func writeFixes(w io.Writer, r analyze.Report, opts Options) {
 	fixes := r.Fixes()
 	if len(fixes) == 0 {
-		fmt.Fprintln(w, "Nothing to fix.")
+		term.PlainLine(w, opts.Style.Level(term.LevelGood, "Nothing to fix."))
 		return
 	}
 
-	heading := "FIX FIRST"
+	heading := opts.Style.Bold("FIX FIRST")
 	if len(fixes) > maxFixes {
-		heading = fmt.Sprintf("FIX FIRST (%d more in -v)", len(fixes)-maxFixes)
+		heading += " " + opts.Style.Dim(fmt.Sprintf("(%d more in -v)", len(fixes)-maxFixes))
 	}
-	fmt.Fprintln(w, heading)
+	term.PlainLine(w, heading)
 	for i, fix := range fixes {
 		if i >= maxFixes {
 			return
 		}
-		fmt.Fprintf(w, "  %d. %s\n", i+1, fix.Text)
+		// The mark lets a reader scan the list without reading the sentences.
+		mark := opts.Style.Level(severityLevel(fix.Severity), markFor(fix.Severity))
+		fmt.Fprintf(w, "  %s %d. %s\n", mark, i+1, fix.Text)
 		if fix.Command != "" {
-			fmt.Fprintf(w, "     %s\n", fix.Command)
+			fmt.Fprintf(w, "       %s\n", opts.Style.Dim(fix.Command))
 		}
+	}
+}
+
+// severityLevel maps a fix onto the same palette the verdicts use.
+func severityLevel(severity analyze.State) term.Level {
+	switch severity {
+	case analyze.StateUnmanaged:
+		return term.LevelBad
+	case analyze.StateWarn:
+		return term.LevelWarn
+	default:
+		return term.LevelMuted
+	}
+}
+
+// markFor gives each severity a glyph, so the list can be scanned without
+// reading the sentences.
+func markFor(severity analyze.State) string {
+	switch severity {
+	case analyze.StateUnmanaged:
+		return "\u2717"
+	case analyze.StateWarn:
+		return "!"
+	default:
+		return "\u00b7"
 	}
 }
 
 // writeDetails lists the measurements. Only facts that cannot be derived from
 // the verdicts belong here: anything the four lines already imply is noise.
-func writeDetails(w io.Writer, r analyze.Report) {
+func writeDetails(w io.Writer, r analyze.Report, opts Options) {
 	f := r.Facts
 
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "MEASUREMENTS")
+	term.PlainLine(w, opts.Style.Bold("MEASUREMENTS"))
 	fmt.Fprintln(w, strings.Repeat("-", titleWidth))
 
 	for i, a := range r.Answers {
-		fmt.Fprintf(w, "%d  %s [%s]\n", i+1, a.Question, a.State)
+		fmt.Fprintf(w, "%d  %s [%s]\n", i+1, a.Question,
+			opts.Style.Level(levelOf(a.State), a.State.String()))
 		fmt.Fprintf(w, "   %s\n", a.Summary)
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "TUNNEL EXIT")
+	term.PlainLine(w, opts.Style.Bold("TUNNEL EXIT"))
 	if f.Egress == nil {
 		fmt.Fprintln(w, "  not measured")
 	} else {
@@ -107,7 +186,7 @@ func writeDetails(w io.Writer, r analyze.Report) {
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "RESOLVERS")
+	term.PlainLine(w, opts.Style.Bold("RESOLVERS"))
 	if len(f.Resolvers) == 0 {
 		fmt.Fprintln(w, "  none found")
 	}
@@ -121,7 +200,7 @@ func writeDetails(w io.Writer, r analyze.Report) {
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "PROBES")
+	term.PlainLine(w, opts.Style.Bold("PROBES"))
 	fmt.Fprintf(w, "  hijack      %s\n", hijackNotes(f))
 	fmt.Fprintf(w, "  cleartext   udp %s, tcp %s\n", reachable(f.PlaintextUDP), reachable(f.PlaintextTCP))
 	fmt.Fprintf(w, "  fake-ip     %s\n", yesNo(fakeIP(f)))
@@ -212,4 +291,14 @@ func padLeft(width int, s string) string {
 		return s
 	}
 	return strings.Repeat(" ", width-len(s)) + s
+}
+
+// padStyled right-aligns a styled string using the width of its plain form.
+// Padding a coloured string with its own length would count every escape
+// sequence as visible, so the two must be kept apart.
+func padStyled(width int, plain, styled string) string {
+	if len(plain) >= width {
+		return styled
+	}
+	return strings.Repeat(" ", width-len(plain)) + styled
 }

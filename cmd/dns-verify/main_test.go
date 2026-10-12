@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/fdaio/dns-verify/internal/analyze"
 	"github.com/fdaio/dns-verify/internal/probe"
 	"github.com/fdaio/dns-verify/internal/sysdns"
+	"github.com/fdaio/dns-verify/internal/term"
 )
 
 func staticCheck(facts analyze.Facts) checker {
@@ -25,7 +28,7 @@ func failingCheck(err error) checker {
 func runMain(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr strings.Builder
-	code := realMain(args, &stdout, &stderr, staticCheck(worstCaseFacts()))
+	code := realMain(args, &stdout, &stderr, term.Env{}, staticCheck(worstCaseFacts()), func() {})
 	return code, stdout.String(), stderr.String()
 }
 
@@ -109,7 +112,7 @@ func TestVerboseAddsMeasurements(t *testing.T) {
 // that reads as a clean run.
 func TestCheckFailure(t *testing.T) {
 	var stdout, stderr strings.Builder
-	code := realMain(nil, &stdout, &stderr, failingCheck(errors.New("scutil --dns: not found")))
+	code := realMain(nil, &stdout, &stderr, term.Env{}, failingCheck(errors.New("scutil --dns: not found")), func() {})
 
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
@@ -145,4 +148,42 @@ func worstCaseFacts() analyze.Facts {
 			Answers: map[string][]netip.Addr{"x.example.com": {addr("45.33.32.156")}},
 		},
 	}
+}
+
+// The progress row is erased before the report starts. Erasing afterwards would
+// land on the last line of the report and blank it.
+func TestProgressIsClearedBeforeTheReport(t *testing.T) {
+	var stdout, stderr strings.Builder
+	order := &callOrder{}
+
+	realMain(nil, &stdout, &stderr, term.Env{},
+		func(context.Context) (analyze.Report, error) {
+			order.record("check")
+			return analyze.Build(worstCaseFacts()), nil
+		},
+		func() {
+			order.record("clear")
+			fmt.Fprint(&stdout, "\x1b[ERASE\x1b[0m")
+		})
+
+	want := []string{"check", "clear"}
+	if !order.matches(want) {
+		t.Fatalf("call order = %v, want %v", order.calls, want)
+	}
+	erase := strings.Index(stdout.String(), "\x1b[ERASE")
+	report := strings.Index(stdout.String(), "DNS VERIFY")
+	if erase < 0 || report < 0 || report < erase {
+		t.Errorf("the report must start after the erase, got %q", stdout.String()[:40])
+	}
+}
+
+// callOrder records the sequence in which the command ran its parts.
+type callOrder struct {
+	calls []string
+}
+
+func (o *callOrder) record(name string) { o.calls = append(o.calls, name) }
+
+func (o *callOrder) matches(want []string) bool {
+	return slices.Equal(o.calls, want)
 }

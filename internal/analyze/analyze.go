@@ -192,17 +192,45 @@ func (r Report) NotMeasured() int {
 	return n
 }
 
-// Grade is the one-word headline of the run.
-func (r Report) Grade() string {
-	switch r.Worst() {
-	case StateGood:
+// Grade is the one-word headline of a run.
+type Grade int
+
+const (
+	// GradeUnknown means the run could not measure the machine.
+	GradeUnknown Grade = iota
+	// GradeGood means every question is under control.
+	GradeGood
+	// GradePartial means something is under control and something is not.
+	GradePartial
+	// GradePoor means nothing is under control.
+	GradePoor
+)
+
+// String returns the headline as it appears in the report.
+func (g Grade) String() string {
+	switch g {
+	case GradeGood:
 		return "UNDER CONTROL"
-	case StateWarn:
+	case GradePartial:
 		return "PARTLY MANAGED"
-	case StateUnmanaged:
+	case GradePoor:
 		return "NOT MANAGED"
 	default:
 		return "INCONCLUSIVE"
+	}
+}
+
+// Grade is the one-word headline of the run.
+func (r Report) Grade() Grade {
+	switch r.Worst() {
+	case StateGood:
+		return GradeGood
+	case StateWarn:
+		return GradePartial
+	case StateUnmanaged:
+		return GradePoor
+	default:
+		return GradeUnknown
 	}
 }
 
@@ -373,7 +401,8 @@ func answerProxyCoverage(f Facts) Answer {
 	)
 	if len(offTunnel) > 0 {
 		state = StateUnmanaged
-		reasons = append(reasons, joinAnd(offTunnel)+" answers from outside the tunnel exit")
+		reasons = append(reasons, joinAnd(offTunnel)+" "+agree(len(offTunnel), "answers", "answer")+
+			" from outside the tunnel exit")
 		summary = "No. " + joinAnd(offTunnel) +
 			" answers from outside the tunnel exit, so lookups bypass the proxy."
 		fix = &Fix{
@@ -554,7 +583,7 @@ func answerLeak(f Facts) Answer {
 		Label:    label,
 		Question: question,
 		State:    StateUnmanaged,
-		Hint:     joinAnd(parts) + " answer from outside the tunnel",
+		Hint:     joinAnd(parts) + " " + agree(len(parts), "answers", "answer") + " from outside the tunnel",
 		Summary: fmt.Sprintf("Yes. Traffic exits at %s, but these resolvers answer from a different source: %s.%s",
 			exit, joinAnd(parts), unmeasuredNote),
 		Fix: &Fix{
@@ -622,6 +651,15 @@ func pluralResolvers(n int) string {
 		return "1 resolver"
 	}
 	return fmt.Sprintf("%d resolvers", n)
+}
+
+// agree picks the verb form that fits the number of subjects, so a list of one
+// does not read as a list of many.
+func agree(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
 }
 
 // resolverLabel renders a resolver with the fact that matters for it.

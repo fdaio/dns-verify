@@ -31,12 +31,39 @@ var escapeResolvers = []netip.Addr{
 	netip.MustParseAddr("8.8.8.8"),
 }
 
+// Observer receives the stages of a run so a caller can show progress. Every
+// method must be safe to call on a nil Observer, which is how the check runs
+// when the output cannot show anything.
+type Observer interface {
+	// Start names a stage and says how many steps it has.
+	Start(label string, total int)
+	// Advance completes one step of the current stage.
+	Advance()
+}
+
+// nopObserver is used when nothing is watching.
+type nopObserver struct{}
+
+func (nopObserver) Start(string, int) {}
+func (nopObserver) Advance()          {}
+
 // Run performs the check and returns the assembled report.
 func Run(ctx context.Context) (analyze.Report, error) {
+	return RunWith(ctx, nil)
+}
+
+// RunWith performs the check and reports each stage to the observer.
+func RunWith(ctx context.Context, obs Observer) (analyze.Report, error) {
+	if obs == nil {
+		obs = nopObserver{}
+	}
+
+	obs.Start("reading DNS configuration", 1)
 	cfg, err := sysdns.System(ctx)
 	if err != nil {
 		return analyze.Report{}, err
 	}
+	obs.Advance()
 
 	facts := analyze.Facts{
 		Origins:   make(map[string]probe.Origin),
@@ -51,16 +78,18 @@ func Run(ctx context.Context) (analyze.Report, error) {
 
 	// The exit address is the reference every other measurement is compared to,
 	// so it starts first.
+	obs.Start("measuring the tunnel exit", 1)
 	if egress, err := probe.EgressAddr(ctx); err == nil {
 		facts.Egress = &egress
 	}
+	obs.Advance()
 
-	results := measureResolvers(ctx, facts.Resolvers)
+	results := measureResolvers(ctx, facts.Resolvers, obs)
 	applyResolverResults(&facts, results)
 
 	measureEscape(ctx, &facts)
-	measureHijack(ctx, &facts)
-	measureOrigins(ctx, &facts)
+	measureHijack(ctx, facts.Resolvers, &facts, obs)
+	measureOrigins(ctx, &facts, obs)
 
 	return analyze.Build(facts), nil
 }
@@ -138,7 +167,9 @@ type measurement struct {
 
 // measureResolvers probes every resolver at once. A run costs several network
 // round trips, and a dead resolver must not delay the rest of the report.
-func measureResolvers(ctx context.Context, views []analyze.ResolverView) []measurement {
+func measureResolvers(ctx context.Context, views []analyze.ResolverView, obs Observer) []measurement {
+	obs.Start("asking resolvers for their source address", len(views))
+
 	results := make([]measurement, len(views))
 	var wg sync.WaitGroup
 	for i := range views {
@@ -147,9 +178,11 @@ func measureResolvers(ctx context.Context, views []analyze.ResolverView) []measu
 			defer wg.Done()
 			view := views[i]
 			if !view.Reachable {
+				obs.Advance()
 				return
 			}
 			results[i] = probeResolver(ctx, probe.Resolver{Addr: view.Addr, Port: view.Port})
+			obs.Advance()
 		}(i)
 	}
 	wg.Wait()
@@ -208,55 +241,63 @@ func measureEscape(ctx context.Context, facts *analyze.Facts) {
 	}
 }
 
-// measureHijack sends unresolvable names through every reachable resolver. The
-// names go out one resolver at a time so that a rewritten answer names the
-// resolver that produced it.
-func measureHijack(ctx context.Context, facts *analyze.Facts) {
+// measureHijack sends unresolvable names through every reachable resolver.
+func measureHijack(ctx context.Context, views []analyze.ResolverView,
+	facts *analyze.Facts, obs Observer) {
 	seen := make(map[netip.Addr]bool)
-	for _, view := range facts.Resolvers {
-		if !view.Reachable || seen[view.Addr] {
-			continue
+	targets := make([]analyze.ResolverView, 0, len(views))
+	for _, view := range views {
+		if view.Reachable && !seen[view.Addr] {
+			seen[view.Addr] = true
+			targets = append(targets, view)
 		}
-		seen[view.Addr] = true
+	}
 
+	obs.Start("probing for hijacked answers", len(targets))
+	for _, view := range targets {
 		result, err := probe.Hijack(ctx, probe.Resolver{Addr: view.Addr, Port: view.Port}, hijackProbes)
-		if err != nil {
-			// A resolver that cannot answer is left unmeasured, so the probe
-			// result is never mistaken for a clean one.
-			continue
+		if err == nil {
+			facts.Hijack.Probed = append(facts.Hijack.Probed, result.Probed...)
+			for label, addrs := range result.Answers {
+				facts.Hijack.Answers[label] = append(facts.Hijack.Answers[label], addrs...)
+			}
 		}
-		facts.Hijack.Probed = append(facts.Hijack.Probed, result.Probed...)
-		for label, addrs := range result.Answers {
-			facts.Hijack.Answers[label] = append(facts.Hijack.Answers[label], addrs...)
-		}
+		obs.Advance()
 	}
 }
 
 // measureOrigins records the network each observed address belongs to, so the
 // report can say whether a resolver sits with the tunnel operator or elsewhere.
-func measureOrigins(ctx context.Context, facts *analyze.Facts) {
+func measureOrigins(ctx context.Context, facts *analyze.Facts, obs Observer) {
 	seen := make(map[netip.Addr]bool)
-	measure := func(addr netip.Addr) {
+	collect := func(addr netip.Addr) {
 		if !addr.IsValid() || seen[addr] {
 			return
 		}
 		seen[addr] = true
-		origin, err := probe.OriginOf(ctx, lookupResolver, addr)
-		if err != nil {
-			return
-		}
-		facts.Origins[addr.String()] = origin
-		if facts.Egress != nil && facts.Egress.Addr == addr {
-			copied := origin
-			facts.EgressOrigin = &copied
-		}
+		measureOrigin(ctx, facts, addr)
 	}
 
+	obs.Start("looking up the network of each address", len(seen)+1)
 	if facts.Egress != nil {
-		measure(facts.Egress.Addr)
+		collect(facts.Egress.Addr)
 	}
 	for _, view := range facts.Resolvers {
-		measure(view.EchoAddr)
-		measure(view.UpstreamAddr)
+		collect(view.EchoAddr)
+		collect(view.UpstreamAddr)
+	}
+	obs.Advance()
+}
+
+// measureOrigin looks up one address and records the result.
+func measureOrigin(ctx context.Context, facts *analyze.Facts, addr netip.Addr) {
+	origin, err := probe.OriginOf(ctx, lookupResolver, addr)
+	if err != nil {
+		return
+	}
+	facts.Origins[addr.String()] = origin
+	if facts.Egress != nil && facts.Egress.Addr == addr {
+		copied := origin
+		facts.EgressOrigin = &copied
 	}
 }

@@ -31,6 +31,34 @@ Run with -v for the measurements behind these verdicts.
 When none of the four is controlled, the grade reads `NOT MANAGED` instead of
 implying a result.
 
+## Terminal output
+
+While the check runs, a single line shows what it is doing:
+
+```
+⠹ asking resolvers for their source address 1/3  ████████░░░░░░░░░░
+```
+
+The line is erased before the report prints, so nothing is left behind when the
+run ends, fails or is interrupted.
+
+In a terminal the verdict states are coloured: `good` green, `warn` yellow,
+`unmanaged` red, and `unknown` grey. The score carries the colour of its grade.
+Nothing else is coloured, so the colour means severity and nothing more.
+
+Both colour and the progress line need a terminal, and both are off otherwise:
+
+| Stream | Colour | Progress |
+|--------|--------|----------|
+| Terminal | on | on |
+| Redirected to a file | off | off |
+| In a pipeline | off | off |
+| `NO_COLOR=1` in a terminal | off | on |
+| `TERM=dumb` in a terminal | off | off |
+
+A stream that cannot show them receives no escape sequence at all, so a report
+redirected to a file stays byte for byte the plain text.
+
 ## Flags
 
 | Flag | Effect |
