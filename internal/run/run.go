@@ -42,10 +42,8 @@ func Run(ctx context.Context) (analyze.Report, error) {
 		Origins:   make(map[string]probe.Origin),
 		Resolvers: resolverViews(cfg),
 	}
-	for _, v := range facts.Resolvers {
-		facts.SplitScopedDomains += len(v.ServesDomains)
-	}
-	facts.ExplicitServices, facts.TotalServices = explicitServices(ctx, facts.Resolvers)
+	facts.ServiceNames, facts.ExplicitServices, facts.TotalServices =
+		explicitServices(ctx, facts.Resolvers)
 	facts.EncryptedProfiles = encryptedProfiles()
 	if addrs, err := sysdns.IPv6Bypass(); err == nil {
 		facts.IPv6Bypass = addrs
@@ -83,28 +81,26 @@ func resolverViews(cfg sysdns.Config) []analyze.ResolverView {
 			Kind:          sysdns.Classify(g.Addr),
 			Flags:         g.Flags,
 			Reachable:     g.Reachable,
-			ServesDomains: g.Domains,
+			ServesDomains: len(g.Domains),
 		})
 	}
 	return out
 }
 
-// explicitServices counts the services that have a hand-set server, then marks
-// the resolvers a human chose. A server the network hands out is not a choice.
-func explicitServices(ctx context.Context, views []analyze.ResolverView) (explicit, total int) {
+// explicitServices returns the enabled service names, the number of services
+// with a hand-set server, and the total. It also marks the resolvers a human
+// chose, because a server the network hands out is not a choice.
+func explicitServices(ctx context.Context, views []analyze.ResolverView) ([]string, int, int) {
 	services, err := sysdns.ExplicitServers(ctx)
 	if err != nil {
-		return 0, 0
+		return nil, 0, 0
 	}
 
+	names := make([]string, 0, len(services))
 	chosen := make(map[netip.Addr]bool)
-	for _, servers := range services {
-		total++
-		if len(servers) == 0 {
-			continue
-		}
-		explicit++
-		for _, server := range servers {
+	for _, service := range services {
+		names = append(names, service.Name)
+		for _, server := range service.Servers {
 			if addr, err := netip.ParseAddr(server); err == nil {
 				chosen[addr.Unmap()] = true
 			}
@@ -113,7 +109,7 @@ func explicitServices(ctx context.Context, views []analyze.ResolverView) (explic
 	for i := range views {
 		views[i].Explicit = chosen[views[i].Addr]
 	}
-	return explicit, total
+	return names, len(chosen), len(names)
 }
 
 // encryptedProfiles lists the DoH and DoT profiles installed on this machine.
@@ -225,7 +221,8 @@ func measureHijack(ctx context.Context, facts *analyze.Facts) {
 
 		result, err := probe.Hijack(ctx, probe.Resolver{Addr: view.Addr, Port: view.Port}, hijackProbes)
 		if err != nil {
-			facts.HijackErr = err
+			// A resolver that cannot answer is left unmeasured, so the probe
+			// result is never mistaken for a clean one.
 			continue
 		}
 		facts.Hijack.Probed = append(facts.Hijack.Probed, result.Probed...)
