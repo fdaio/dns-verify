@@ -60,21 +60,37 @@ jobs:
   build:
     name: build (${{ matrix.os }}/${{ matrix.arch }})
     needs: [ test-platform ]
-    runs-on: ${{ matrix.os == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
+    # Each platform is built on a runner of its own, so the job can run what it
+    # produced. A cross-built binary cannot execute here, and pretending
+    # otherwise is what made this job fail once.
+    #
+    # macOS 14 is deprecated upstream, so macOS 15 is used for arm64. Intel macOS
+    # runners are not offered on any current image, so that build is cross
+    # compiled and the version check is skipped there rather than run into a
+    # failure it can never pass.
+    runs-on: >-
+      ${{ matrix.os == 'darwin' && 'macos-15'
+      || (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest') }}
     strategy:
       # Cancelling the sibling on the first failure hides that architecture's
       # result, which is how a release once shipped with a missing binary.
       fail-fast: false
       matrix:
         include:
-          - os: darwin
-            arch: amd64
+          # The flag says whether the runner can execute what this row builds.
           - os: darwin
             arch: arm64
-          - os: linux
+            runnable: true
+          # Intel macOS has no hosted runner, so this one is cross compiled.
+          - os: darwin
             arch: amd64
+            runnable: false
           - os: linux
             arch: arm64
+            runnable: true
+          - os: linux
+            arch: amd64
+            runnable: true
     steps:
       - uses: actions/checkout@v4
 
@@ -107,11 +123,17 @@ jobs:
             fi
           done
           # The binary must report this tag, so a stamping mistake fails here
-          # rather than in a user's hands.
-          reported=$(./staging/dns-verify --version)
-          if [ "$reported" != "dns-verify ${GITHUB_REF_NAME}" ]; then
-            echo "binary reports '$reported', want 'dns-verify ${GITHUB_REF_NAME}'"
-            exit 1
+          # rather than in a user's hands. A binary the runner cannot execute is
+          # not run at all, because a check that can never pass is worse than
+          # none; that row is covered by the test job on a real runner.
+          if [ "${{ matrix.runnable }}" = "true" ]; then
+            reported=$(./staging/dns-verify --version)
+            if [ "$reported" != "dns-verify ${GITHUB_REF_NAME}" ]; then
+              echo "binary reports '$reported', want 'dns-verify ${GITHUB_REF_NAME}'"
+              exit 1
+            fi
+          else
+            echo "the runner cannot execute ${{ matrix.os }}/${{ matrix.arch }}, skipping the run"
           fi
           echo "built $archive"
 
