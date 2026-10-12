@@ -221,17 +221,17 @@ func TestBarNeverGoesBackwards(t *testing.T) {
 	}
 }
 
-// A stage name of a different length must not move anything before it. The bar
-// and the stage name both have to start on the same column every frame.
+// A stage name of a different length must not move anything before it. The bar,
+// the count and the name must all start on the same column every frame.
 func TestStageNameDoesNotMoveTheBar(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProgress(&buf, Env{Progress: true})
 
-	barColumn, labelColumn := 0, 0
+	barColumn, nameColumn := 0, 0
 	for _, label := range []string{
-		"reading DNS configuration",
 		"measuring the tunnel exit",
 		"asking resolvers for their source address",
+		"probing for hijacked answers",
 		"looking up the network of each address",
 	} {
 		p.Start(label, 20)
@@ -242,32 +242,58 @@ func TestStageNameDoesNotMoveTheBar(t *testing.T) {
 			t.Fatalf("stage %q drew no bar or no name: %q", label, line)
 		}
 		if barColumn == 0 {
-			barColumn, labelColumn = bar, name
+			barColumn, nameColumn = bar, name
 		}
 		if bar != barColumn {
 			t.Errorf("stage %q put the bar at column %d, want %d", label, bar, barColumn)
 		}
-		if name != labelColumn {
-			t.Errorf("stage %q put the name at column %d, want %d", label, name, labelColumn)
+		if name != nameColumn {
+			t.Errorf("stage %q put the name at column %d, want %d", label, name, nameColumn)
 		}
 	}
 }
 
-// The counter appears once the total is known. It must be the last thing on the
-// line, so the stage name does not shift when it shows up.
-func TestCountAppearsAtTheEndOfTheLine(t *testing.T) {
+// The count sits between the bar and the name, and both of those keep a fixed
+// column for the whole run. The name is last, so it can change length freely.
+func TestCountSitsBetweenBarAndName(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProgress(&buf, Env{Progress: true})
 
-	p.Start("reading DNS configuration", 0)
-	if strings.Contains(buf.String(), "/") {
-		t.Errorf("a stage without a total must show no counter, got %q", lastFrame(buf.String()))
-	}
-
 	p.Start("measuring the tunnel exit", 12)
+	p.Advance()
 	line := lastFrame(buf.String())
-	if !strings.HasSuffix(line, "0/12") {
-		t.Errorf("the counter must end the line, got %q", line)
+
+	bar := strings.Index(line, glyphEmpty)
+	count := strings.Index(line, "1/12")
+	name := strings.Index(line, "measuring the tunnel exit")
+	if bar < 0 || count < 0 || name < 0 {
+		t.Fatalf("the line is missing a field: %q", line)
+	}
+	if bar >= count || count >= name {
+		t.Errorf("want bar, then count, then name, got %q", line)
+	}
+}
+
+// The count must not widen when it gains a digit, or it would push the name.
+func TestCountColumnKeepsItsWidth(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProgress(&buf, Env{Progress: true})
+
+	p.Start("looking up the network of each address", 17)
+	name := -1
+	for range 18 {
+		line := lastFrame(buf.String())
+		at := strings.Index(line, "looking up")
+		if at < 0 {
+			t.Fatalf("the name is missing: %q", line)
+		}
+		if name < 0 {
+			name = at
+		}
+		if at != name {
+			t.Fatalf("the name moved from column %d to %d as the count gained digits", name, at)
+		}
+		p.Advance()
 	}
 }
 

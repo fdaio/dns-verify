@@ -3,6 +3,8 @@ package term
 import (
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,9 +21,9 @@ const barWidth = 20
 
 // Progress draws a single line that is rewritten in place.
 //
-// Everything before the stage name keeps a fixed width for the whole run, so a
-// stage name of a different length only grows the end of the line. Nothing
-// before it can move, which is what stops the bar from jumping sideways.
+// The bar and the step count both keep a fixed width for the whole run, so the
+// stage name is the only part whose length changes. It sits last on purpose: it
+// can then be any length, and nothing that has to stay still can be pushed.
 type Progress struct {
 	mu      sync.Mutex
 	w       io.Writer
@@ -32,10 +34,13 @@ type Progress struct {
 	done  int
 	// total is the number of steps in the whole run, taken from the first stage
 	// that knows it. It stays zero until then.
-	total   int
-	frame   int
-	written bool
-	closed  bool
+	total int
+	// countWidth is the width of the done-over-total column, fixed once the
+	// total is known so the column does not widen when the count gains a digit.
+	countWidth int
+	frame      int
+	written    bool
+	closed     bool
 }
 
 // NewProgress returns a progress line for the stream. A disabled progress line
@@ -51,9 +56,8 @@ func (p *Progress) Enabled() bool { return p != nil && p.enabled }
 // the stage, and the count carries over from the stages already done, so the
 // bar only ever moves forward.
 //
-// A stage that runs before the total is known reports zero. The first stage to
-// report a real total sets it, and a later disagreement is ignored, because the
-// line is laid out against one figure.
+// A stage that runs before the total is known reports zero, and no count is
+// drawn until a later stage supplies one.
 func (p *Progress) Start(label string, total int) {
 	if !p.Enabled() {
 		return
@@ -64,6 +68,9 @@ func (p *Progress) Start(label string, total int) {
 	p.label = label
 	if p.total == 0 && total > 0 {
 		p.total = total
+		// Both numbers reach the total at most, so twice its digit count plus
+		// the separator is the widest this column can ever get.
+		p.countWidth = 2*len(strconv.Itoa(total)) + 1
 	}
 	p.frame = 0
 	p.draw()
@@ -122,24 +129,26 @@ func (p *Progress) draw() {
 		return
 	}
 
-	// The bar has a fixed width, so everything up to and including it starts on
-	// the same column whatever the stage is called.
+	// The bar and the count both have a fixed width, so every stage draws them
+	// on the same columns and only the trailing name can change length.
 	line := p.style.Wrap("\x1b[36m", spinnerFrames[p.frame]) + " " +
-		p.style.Wrap(seqDim, bar(percent(p.done, p.total), barWidth)) + "  " +
-		p.label
-	// The count goes last because it is the only field that can appear and
-	// disappear, and nothing follows it that could move.
+		p.style.Wrap(seqDim, bar(percent(p.done, p.total), barWidth))
 	if p.total > 0 {
-		line += "  " + p.style.Wrap(seqDim, p.count())
+		line += " " + p.style.Wrap(seqDim, p.count())
 	}
 
-	_, _ = io.WriteString(p.w, "\r\x1b[2K"+line)
+	_, _ = io.WriteString(p.w, "\r\x1b[2K"+line+"  "+p.label)
 	p.written = true
 }
 
-// count renders the completed steps over the total.
+// count renders the completed steps over the total, padded to the column width
+// so it does not shift the name when the count gains a digit.
 func (p *Progress) count() string {
-	return fmt.Sprintf("%d/%d", min(p.done, p.total), p.total)
+	text := fmt.Sprintf("%d/%d", min(p.done, p.total), p.total)
+	if pad := p.countWidth - len(text); pad > 0 {
+		return strings.Repeat(" ", pad) + text
+	}
+	return text
 }
 
 // percent clamps the completed steps into a whole number from 0 to 99, so the
